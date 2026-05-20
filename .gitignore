@@ -16,7 +16,13 @@ output/videos/*
 output/audio/*
 output/thumbnails/*
 output/logs/*
+output/media/*
+output/repurpose/*
+output/media-library/*
 !output/**/.gitkeep
+
+# pipeline secrets
+pipeline/.env
 
 # misc
 .DS_Store

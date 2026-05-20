@@ -1,0 +1,48 @@
+{
+  "voiceId": "21m00Tcm4TlvDq8ikWAM",
+  "voiceSettings": { "stability": 0.45, "similarityBoost": 0.75, "style": 0.3 },
+  "viralityThreshold": 6,
+  "enabledPlatforms": ["youtube", "tiktok", "instagram", "linkedin", "facebook", "twitter"],
+  "autoPost": {
+    "youtube": false,
+    "tiktok": false,
+    "instagram": false,
+    "linkedin": false,
+    "facebook": false,
+    "twitter": false
+  },
+  "autoRespond": true,
+  "contentPillars": [
+    "AI Automation",
+    "Build in Public",
+    "Client Wins",
+    "Founder Mindset",
+    "Tools & Tutorials",
+    "Behind the Build"
+  ],
+  "hookStyles": ["controversy", "curiosity gap", "direct callout", "bold claim", "story open", "number hook"],
+  "triggerWords": ["AUTOMATE", "BUILD", "STACKD", "SYSTEM", "BLUEPRINT"],
+  "musicTracks": [
+    { "name": "Momentum", "path": "/output/media-library/music/momentum.mp3", "mood": "upbeat" },
+    { "name": "Focus Flow", "path": "/output/media-library/music/focus-flow.mp3", "mood": "calm" },
+    { "name": "Night Drive", "path": "/output/media-library/music/night-drive.mp3", "mood": "cinematic" }
+  ],
+  "brand": {
+    "voicePersona": "Chanel — founder of Stackd Studios. Confident, warm, direct, no fluff. Talks like a sharp operator helping another founder win.",
+    "navy": "#0a1a35",
+    "gold": "#d4af37",
+    "white": "#ffffff",
+    "logoText": "STACKD STUDIOS",
+    "cta": "Comment STACKD and I'll send you the blueprint."
+  },
+  "leadMagnet": {
+    "name": "The Stackd Content Engine Blueprint",
+    "url": "https://stackdstudiosai.com/free/toolkit",
+    "pdfPath": "/output/media-library/lead-magnet.pdf"
+  },
+  "notify": {
+    "channel": "slack",
+    "destination": ""
+  },
+  "calendarLink": "https://cal.com/stackdstudios/intro"
+}

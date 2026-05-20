@@ -1,0 +1,24 @@
+{
+  "name": "stackd-content-engine-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Automation engine that drives a topic through script -> voice -> media -> thumbnail -> render -> post -> repurpose, writing every result to Supabase.",
+  "scripts": {
+    "run": "node src/index.js",
+    "server": "node src/server.js",
+    "cron": "node src/cron.js",
+    "calendar": "node src/calendar/generateCalendar.js",
+    "comments": "node src/engagement/commentMonitor.js",
+    "analytics": "node src/analytics/pullAnalytics.js",
+    "newsletter": "node src/email/weeklyNewsletter.js",
+    "sequence": "node src/email/emailSequence.js",
+    "check": "node scripts/check.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@supabase/supabase-js": "^2.45.4",
+    "dotenv": "^16.4.5",
+    "node-cron": "^3.0.3"
+  }
+}

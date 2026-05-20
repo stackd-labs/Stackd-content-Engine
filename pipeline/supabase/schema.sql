@@ -69,8 +69,14 @@ create table if not exists videos (
   virality_score int check (virality_score between 1 and 10),
   hook_style text,
   content_pillar text,
-  run_log jsonb default '[]'::jsonb
+  run_log jsonb default '[]'::jsonb,
+  -- Stage 9 repurposing output (blog/thread/linkedin/newsletter/clips/quote cards),
+  -- surfaced in the dashboard Video detail panel.
+  repurposed jsonb default '{}'::jsonb
 );
+
+-- Idempotent add for projects created before the repurposed column existed.
+alter table videos add column if not exists repurposed jsonb default '{}'::jsonb;
 
 create table if not exists posts (
   id uuid primary key default gen_random_uuid(),

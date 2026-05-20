@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+**/node_modules/
+
+# next.js
+dashboard/.next/
+dashboard/out/
+
+# env
+.env
+.env.local
+**/.env.local
+
+# pipeline output artifacts (keep the folders, ignore the renders)
+output/videos/*
+output/audio/*
+output/thumbnails/*
+output/logs/*
+!output/**/.gitkeep
+
+# misc
+.DS_Store
+*.log
+.vercel

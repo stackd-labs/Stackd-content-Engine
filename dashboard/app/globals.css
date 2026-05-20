@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Inter', system-ui, sans-serif;
+}
+
+html,
+body {
+  background: #0f0f0f;
+  color: #ffffff;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a2a transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2a2a2a;
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-border bg-surface p-5;
+  }
+  .card-hover {
+    @apply transition-colors hover:border-gold/40 hover:bg-surface-2;
+  }
+  .stat-label {
+    @apply text-xs font-medium uppercase tracking-wider text-white/40;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .input {
+    @apply w-full rounded-lg border border-border bg-bg px-3 py-2 text-sm text-white
+      placeholder:text-white/30 focus:border-gold/60 focus:outline-none focus:ring-1 focus:ring-gold/40;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-colors;
+  }
+  .btn-gold {
+    @apply btn bg-gold text-black hover:bg-gold-soft;
+  }
+  .btn-ghost {
+    @apply btn border border-border bg-transparent text-white/80 hover:bg-surface-2 hover:text-white;
+  }
+  .th {
+    @apply whitespace-nowrap px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-white/40;
+  }
+  .td {
+    @apply whitespace-nowrap px-4 py-3 text-sm text-white/80;
+  }
+  .row-hover {
+    @apply cursor-pointer transition-colors hover:bg-surface-2;
+  }
+}
+
+/* Animated progress shimmer for the live pipeline bar */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(212, 175, 55, 0.25),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}

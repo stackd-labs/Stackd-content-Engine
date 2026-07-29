@@ -180,12 +180,31 @@ create index if not exists idx_pipeline_started on pipeline_runs(started_at desc
 
 -- Realtime -----------------------------------------------------
 -- Enable realtime on the tables the dashboard subscribes to.
-alter publication supabase_realtime add table videos;
-alter publication supabase_realtime add table posts;
-alter publication supabase_realtime add table leads;
-alter publication supabase_realtime add table comments;
-alter publication supabase_realtime add table pipeline_runs;
-alter publication supabase_realtime add table content_calendar;
+-- Wrapped so re-running the script is safe even if a table was
+-- already added to the publication by a prior partial run.
+do $$ begin
+  alter publication supabase_realtime add table videos;
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table posts;
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table leads;
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table comments;
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table pipeline_runs;
+exception when duplicate_object then null; end $$;
+
+do $$ begin
+  alter publication supabase_realtime add table content_calendar;
+exception when duplicate_object then null; end $$;
 
 -- ============================================================
 -- NOTE: This dashboard is an internal command center. Row Level

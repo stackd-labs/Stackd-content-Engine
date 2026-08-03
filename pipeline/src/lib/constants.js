@@ -28,6 +28,11 @@ export const PLATFORMS = ['youtube', 'tiktok', 'instagram', 'linkedin', 'faceboo
 
 export const FORMATS = ['short', 'medium', 'long'];
 
+export const CONTENT_TYPES = ['video', 'photo'];
+
+// YouTube has no photo-post equivalent here — see platforms/index.js.
+export const PHOTO_CAPABLE_PLATFORMS = ['tiktok', 'instagram', 'linkedin', 'facebook', 'twitter'];
+
 // Target durations (seconds) per format.
 export const FORMAT_DURATIONS = {
   short: { min: 20, max: 60, target: 45 },
@@ -40,6 +45,15 @@ export const VIDEO_DIMENSIONS = {
   landscape: { width: 1920, height: 1080 },
   vertical: { width: 1080, height: 1920 },
   square: { width: 1080, height: 1080 },
+};
+
+// DALL·E 3 only accepts these 3 exact sizes — they map 1:1 onto the same
+// landscape/vertical/square orientation buckets used everywhere else, so
+// generatePhotos.js can reuse the same PLATFORM_ORIENTATION lookup as renderVideo.
+export const DALLE_SIZE_BY_ORIENTATION = {
+  landscape: '1792x1024',
+  vertical: '1024x1792',
+  square: '1024x1024',
 };
 
 // Which orientation each platform consumes.

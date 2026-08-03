@@ -84,21 +84,26 @@ const FORMATS = ['short', 'short', 'medium', 'long'] as const;
 export const placeholderVideos: Video[] = TOPICS.map((topic, i) => {
   const status = i < 9 ? 'live' : STATUSES[i % STATUSES.length];
   const format = FORMATS[i % FORMATS.length];
+  // Every 5th item is a photo post — skipped voiceover/render, single image.
+  const contentType: Video['content_type'] = i % 5 === 0 ? 'photo' : 'video';
   const createdOffset = -(TOPICS.length - i) * 1.4;
   const stagesDone = status === 'live' ? PIPELINE_STAGES.length : int(3, PIPELINE_STAGES.length - 2);
   return {
     id: `vid-${String(i + 1).padStart(3, '0')}`,
     title: topic,
     topic,
-    script: `HOOK: ${topic}\n\nMost people think growth needs a big team. It doesn't — it needs a system.\n\nHere are the three moves:\n\n1. Capture every idea in one place.\n2. Let the engine script, score, and render it.\n3. Auto-post and let the comments fill your CRM.\n\nThat's it. The machine runs while you sleep.\n\nCTA: Comment STACKD and I'll send you the full blueprint.`,
+    script: contentType === 'photo' ? '' : `HOOK: ${topic}\n\nMost people think growth needs a big team. It doesn't — it needs a system.\n\nHere are the three moves:\n\n1. Capture every idea in one place.\n2. Let the engine script, score, and render it.\n3. Auto-post and let the comments fill your CRM.\n\nThat's it. The machine runs while you sleep.\n\nCTA: Comment STACKD and I'll send you the full blueprint.`,
     status,
     created_at: iso(createdOffset),
     published_at: status === 'live' ? iso(createdOffset + 0.5) : null,
-    duration_seconds: format === 'short' ? int(22, 58) : format === 'medium' ? int(120, 280) : int(420, 720),
+    duration_seconds: contentType === 'photo' ? null : format === 'short' ? int(22, 58) : format === 'medium' ? int(120, 280) : int(420, 720),
     format,
+    content_type: contentType,
     thumbnail_url: null,
-    video_file_path: status === 'live' ? `/output/videos/vid-${i + 1}.mp4` : null,
-    audio_file_path: stagesDone > 5 ? `/output/audio/vid-${i + 1}.mp3` : null,
+    video_file_path: status !== 'live' ? null
+      : contentType === 'photo' ? `/output/photos/vid-${i + 1}/landscape.png`
+      : `/output/videos/vid-${i + 1}.mp4`,
+    audio_file_path: contentType === 'photo' ? null : stagesDone > 5 ? `/output/audio/vid-${i + 1}.mp3` : null,
     virality_score: int(4, 10),
     hook_style: DEFAULT_HOOK_STYLES[i % DEFAULT_HOOK_STYLES.length],
     content_pillar: DEFAULT_CONTENT_PILLARS[i % DEFAULT_CONTENT_PILLARS.length],
@@ -119,7 +124,9 @@ const fmtForPlatform = (p: Platform): Post['format'] =>
 export const placeholderPosts: Post[] = [];
 placeholderVideos.forEach((v, vi) => {
   if (v.status !== 'live' && v.status !== 'posting') return;
-  const platformsForVideo = PLATFORMS.filter((_, pi) => (vi + pi) % 2 === 0 || pi < 3);
+  // Photo content has no youtube post — see pipeline/README.md § Photo posts.
+  const eligiblePlatforms = v.content_type === 'photo' ? PLATFORMS.filter((p) => p !== 'youtube') : PLATFORMS;
+  const platformsForVideo = eligiblePlatforms.filter((_, pi) => (vi + pi) % 2 === 0 || pi < 3);
   platformsForVideo.forEach((platform, pi) => {
     const idx = placeholderPosts.length + 1;
     placeholderPosts.push({
@@ -136,6 +143,7 @@ placeholderVideos.forEach((v, vi) => {
       hashtags: ['#aiautomation', '#buildinpublic', '#stackdstudios', '#contentengine'].slice(0, int(2, 4)),
       utm_link: `https://stackdstudiosai.com/?utm_source=${platform}&utm_medium=social&utm_campaign=${v.id}`,
       format: fmtForPlatform(platform),
+      content_type: v.content_type,
     });
   });
 });

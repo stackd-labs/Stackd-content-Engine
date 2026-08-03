@@ -152,6 +152,106 @@ export async function uploadToTikTok({ videoId, strategy, files, thumbnails }) {
   }
 }
 
+/**
+ * Photo-post variant — TikTok's Content Posting API has a separate photo
+ * endpoint (distinct from the video/init one above) that only accepts
+ * PULL_FROM_URL — TikTok's servers fetch the image themselves, there's no
+ * FILE_UPLOAD chunking path for photos the way there is for video — so this
+ * needs the same "resolve a public URL" step uploadToInstagram uses.
+ * Posts as a single-image "photo mode" post (draft, same as the video path).
+ */
+export async function uploadPhotoToTikTok({ videoId, strategy, files }) {
+  const utm = `https://stackdstudiosai.com/?utm_source=${PLATFORM}&utm_medium=social&utm_campaign=${videoId}`;
+  const file = files?.[ORIENTATION] ?? files?.square ?? files?.landscape ?? null;
+
+  const baseCaption = strategy?.captions?.[PLATFORM] || strategy?.recommendedHook || strategy?.title || '';
+  const hashtags = strategy?.hashtags?.[PLATFORM] || [];
+  const hashtagStr = hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ');
+  const fullCaption = `${baseCaption}\n\n${hashtagStr}`.slice(0, 2200);
+
+  let platformPostId;
+  let platformUrl;
+
+  const cred = await getPlatformCredential(PLATFORM);
+
+  if (cred?.accessToken) {
+    try {
+      const accessToken = cred.accessToken;
+
+      await fetchJSON('https://open.tiktokapis.com/v2/post/publish/creator_info/query/', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' },
+        body: JSON.stringify({}),
+      });
+
+      const photoBaseUrl = env.TIKTOK_PHOTO_BASE_URL || 'https://cdn.stackdstudiosai.com/photos';
+      const photoPublicUrl = file
+        ? `${photoBaseUrl}/${file.replace(/\\/g, '/').split('/').pop()}`
+        : null;
+      if (!photoPublicUrl) throw new Error('No public image URL available for TikTok photo upload');
+
+      const initRes = await fetchJSON(
+        'https://open.tiktokapis.com/v2/post/publish/content/init/',
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json; charset=UTF-8' },
+          body: JSON.stringify({
+            post_info: {
+              title: fullCaption,
+              privacy_level: 'SELF_ONLY',
+              disable_comment: false,
+            },
+            source_info: {
+              source: 'PULL_FROM_URL',
+              photo_images: [photoPublicUrl],
+              photo_cover_index: 0,
+            },
+            post_mode: 'DIRECT_POST',
+            media_type: 'PHOTO',
+          }),
+        },
+      );
+
+      platformPostId = initRes?.data?.publish_id ?? `tiktok_${cryptoId()}`;
+      platformUrl = `https://tiktok.com/@stackdstudios/photo/${platformPostId}`;
+      log.ok(`tiktok draft photo uploaded: ${platformUrl}`);
+    } catch (err) {
+      log.error(`tiktok photo upload failed — ${err.message}`);
+      platformPostId = `tiktok_${cryptoId()}`;
+      platformUrl = `https://tiktok.com/@stackdstudios/photo/${platformPostId}`;
+    }
+  } else {
+    log.mock(`tiktok photo upload (videoId: ${videoId})`);
+    platformPostId = `tiktok_${cryptoId()}`;
+    platformUrl = `https://tiktok.com/@stackdstudios/photo/${platformPostId}`;
+  }
+
+  const row = {
+    video_id: videoId,
+    platform: PLATFORM,
+    status: 'scheduled',
+    platform_post_id: platformPostId,
+    platform_url: platformUrl,
+    posted_at: null,
+    scheduled_for: null,
+    title: strategy?.title || '',
+    caption: fullCaption,
+    hashtags,
+    utm_link: utm,
+    format: ORIENTATION,
+    content_type: 'photo',
+  };
+
+  try {
+    const record = await dbInsert('posts', row);
+    log.ok(`tiktok posts row saved: ${record?.id ?? '(no id)'}`);
+    return record ?? { platform: PLATFORM, ...row };
+  } catch (err) {
+    log.error(`tiktok dbInsert failed — ${err.message}`);
+    return { platform: PLATFORM, ...row };
+  }
+}
+
 export default uploadToTikTok;
 
 // ---- main guard -------------------------------------------------------------

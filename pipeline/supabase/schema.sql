@@ -16,6 +16,10 @@ do $$ begin
 exception when duplicate_object then null; end $$;
 
 do $$ begin
+  create type content_type as enum ('video','photo');
+exception when duplicate_object then null; end $$;
+
+do $$ begin
   create type platform as enum ('youtube','tiktok','instagram','linkedin','facebook','twitter');
 exception when duplicate_object then null; end $$;
 
@@ -63,6 +67,8 @@ create table if not exists videos (
   published_at timestamptz,
   duration_seconds int,
   format video_format not null default 'short',
+  -- 'photo' rows skip voiceover/render entirely — see pipeline/README.md § Photo posts.
+  content_type content_type not null default 'video',
   thumbnail_url text,
   video_file_path text,
   audio_file_path text,
@@ -82,6 +88,7 @@ create table if not exists videos (
 -- Idempotent add for projects created before the repurposed column existed.
 alter table videos add column if not exists repurposed jsonb default '{}'::jsonb;
 alter table videos add column if not exists pending_post_payload jsonb;
+alter table videos add column if not exists content_type content_type not null default 'video';
 
 create table if not exists posts (
   id uuid primary key default gen_random_uuid(),
@@ -96,8 +103,11 @@ create table if not exists posts (
   caption text,
   hashtags text[] default '{}',
   utm_link text,
-  format post_format not null default 'vertical'
+  format post_format not null default 'vertical',
+  content_type content_type not null default 'video'
 );
+
+alter table posts add column if not exists content_type content_type not null default 'video';
 
 create table if not exists analytics (
   id uuid primary key default gen_random_uuid(),

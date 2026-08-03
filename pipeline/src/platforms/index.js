@@ -6,15 +6,16 @@
 // ============================================================
 import { pathToFileURL } from 'node:url';
 import { uploadToYouTube } from './uploadToYouTube.js';
-import { uploadToTikTok } from './uploadToTikTok.js';
-import { uploadToInstagram } from './uploadToInstagram.js';
-import { uploadToLinkedIn } from './uploadToLinkedIn.js';
-import { uploadToFacebook } from './uploadToFacebook.js';
-import { uploadToTwitter } from './uploadToTwitter.js';
+import { uploadToTikTok, uploadPhotoToTikTok } from './uploadToTikTok.js';
+import { uploadToInstagram, uploadPhotoToInstagram } from './uploadToInstagram.js';
+import { uploadToLinkedIn, uploadPhotoToLinkedIn } from './uploadToLinkedIn.js';
+import { uploadToFacebook, uploadPhotoToFacebook } from './uploadToFacebook.js';
+import { uploadToTwitter, uploadPhotoToTwitter } from './uploadToTwitter.js';
 import { getSettings } from '../lib/settings.js';
 import { setVideoStatus, updateVideo, appendVideoLog } from '../lib/runState.js';
 import { dbSelect } from '../lib/supabase.js';
 import { log } from '../lib/logger.js';
+import { PHOTO_CAPABLE_PLATFORMS } from '../lib/constants.js';
 
 const UPLOADER_MAP = {
   youtube:   uploadToYouTube,
@@ -23,6 +24,15 @@ const UPLOADER_MAP = {
   linkedin:  uploadToLinkedIn,
   facebook:  uploadToFacebook,
   twitter:   uploadToTwitter,
+};
+
+// No youtube entry — it has no photo-post equivalent in this pipeline.
+const PHOTO_UPLOADER_MAP = {
+  tiktok:    uploadPhotoToTikTok,
+  instagram: uploadPhotoToInstagram,
+  linkedin:  uploadPhotoToLinkedIn,
+  facebook:  uploadPhotoToFacebook,
+  twitter:   uploadPhotoToTwitter,
 };
 
 /**
@@ -34,25 +44,37 @@ const UPLOADER_MAP = {
  *   files: { landscape?: string|null, vertical?: string|null, square?: string|null },
  *   thumbnails: { selected?: string|null, options?: string[] },
  *   platforms?: string[],
+ *   contentType?: 'video' | 'photo',
  * }} opts
  * @returns {Promise<Array<{ platform: string, ok: boolean, post?: object, error?: string }>>}
  */
-export async function postToPlatforms({ videoId, strategy, files, thumbnails, platforms }) {
+export async function postToPlatforms({ videoId, strategy, files, thumbnails, platforms, contentType = 'video' }) {
   log.stage('post', videoId);
 
+  const isPhoto = contentType === 'photo';
+  const uploaderMap = isPhoto ? PHOTO_UPLOADER_MAP : UPLOADER_MAP;
+
   const settings = getSettings();
-  const targetPlatforms = Array.isArray(platforms) && platforms.length > 0
+  let targetPlatforms = Array.isArray(platforms) && platforms.length > 0
     ? platforms
     : (settings.enabledPlatforms || Object.keys(UPLOADER_MAP));
 
-  log.info(`postToPlatforms: targeting [${targetPlatforms.join(', ')}] for video ${videoId}`);
+  if (isPhoto) {
+    const dropped = targetPlatforms.filter((p) => !PHOTO_CAPABLE_PLATFORMS.includes(p));
+    if (dropped.length > 0) {
+      log.warn(`postToPlatforms: dropping [${dropped.join(', ')}] — no photo-post support`);
+    }
+    targetPlatforms = targetPlatforms.filter((p) => PHOTO_CAPABLE_PLATFORMS.includes(p));
+  }
+
+  log.info(`postToPlatforms: targeting [${targetPlatforms.join(', ')}] for ${contentType} ${videoId}`);
 
   // Fan out in parallel — each uploader is independently try/caught.
   const settled = await Promise.allSettled(
     targetPlatforms.map((platform) => {
-      const uploader = UPLOADER_MAP[platform];
+      const uploader = uploaderMap[platform];
       if (!uploader) {
-        return Promise.reject(new Error(`No uploader registered for platform: ${platform}`));
+        return Promise.reject(new Error(`No ${contentType} uploader registered for platform: ${platform}`));
       }
       return uploader({ videoId, strategy, files, thumbnails });
     }),
@@ -120,6 +142,7 @@ export async function approveAndPost(videoId) {
     files: payload.files,
     thumbnails: payload.thumbnails,
     platforms: payload.platforms,
+    contentType: payload.contentType,
   });
 
   try { await updateVideo(videoId, { pending_post_payload: null }); }

@@ -160,6 +160,143 @@ export async function uploadToLinkedIn({ videoId, strategy, files, thumbnails })
   }
 }
 
+/**
+ * Photo-post variant — same registerUpload + UGC post flow as the video path,
+ * but the 'feedshare-image' recipe and shareMediaCategory: 'IMAGE'. Image
+ * media entries don't take a `title` field the way video ones do.
+ */
+export async function uploadPhotoToLinkedIn({ videoId, strategy, files }) {
+  const utm = `https://stackdstudiosai.com/?utm_source=${PLATFORM}&utm_medium=social&utm_campaign=${videoId}`;
+  const file = files?.[ORIENTATION] ?? files?.square ?? files?.landscape ?? null;
+
+  const baseCaption = strategy?.captions?.[PLATFORM] || strategy?.recommendedHook || strategy?.title || '';
+  const allHashtags = strategy?.hashtags?.[PLATFORM] || [];
+  const hashtags = allHashtags.slice(0, 5);
+  const hashtagStr = hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ');
+  const fullCaption = `${baseCaption}\n\n${utm}\n\n${hashtagStr}`.slice(0, 3000);
+
+  let platformPostId;
+  let platformUrl;
+
+  if (has('LINKEDIN_ACCESS_TOKEN', 'LINKEDIN_PERSON_ID')) {
+    try {
+      const accessToken = env.LINKEDIN_ACCESS_TOKEN;
+      const personId = env.LINKEDIN_PERSON_ID;
+      const personUrn = `urn:li:person:${personId}`;
+
+      const registerRes = await fetchJSON(
+        `${LI_BASE}/assets?action=registerUpload`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Restli-Protocol-Version': '2.0.0',
+          },
+          body: JSON.stringify({
+            registerUploadRequest: {
+              recipes: ['urn:li:digitalmediaRecipe:feedshare-image'],
+              owner: personUrn,
+              serviceRelationships: [{
+                relationshipType: 'OWNER',
+                identifier: 'urn:li:userGeneratedContent',
+              }],
+            },
+          }),
+        },
+      );
+
+      const asset = registerRes?.value?.asset;
+      const uploadUrl = registerRes?.value?.uploadMechanism?.[
+        'com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'
+      ]?.uploadUrl;
+      if (!asset || !uploadUrl) throw new Error('LinkedIn registerUpload did not return asset/uploadUrl');
+
+      let imageBuffer = null;
+      if (file) {
+        try { imageBuffer = await readFile(join(process.cwd(), file)); }
+        catch (e) { log.warn(`linkedin readFile ${file}: ${e.message}`); }
+      }
+      if (!imageBuffer) throw new Error('No image file buffer available for LinkedIn photo upload');
+
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'image/png' },
+        body: imageBuffer,
+      });
+      if (!uploadRes.ok) {
+        const errText = await uploadRes.text();
+        throw new Error(`LinkedIn image upload failed ${uploadRes.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const ugcRes = await fetchJSON(
+        `${LI_BASE}/ugcPosts`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Restli-Protocol-Version': '2.0.0',
+          },
+          body: JSON.stringify({
+            author: personUrn,
+            lifecycleState: 'PUBLISHED',
+            specificContent: {
+              'com.linkedin.ugc.ShareContent': {
+                shareCommentary: { text: fullCaption },
+                shareMediaCategory: 'IMAGE',
+                media: [{
+                  status: 'READY',
+                  description: { text: strategy?.seo?.description || baseCaption },
+                  media: asset,
+                }],
+              },
+            },
+            visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' },
+          }),
+        },
+      );
+
+      platformPostId = ugcRes?.id ?? `linkedin_${cryptoId()}`;
+      platformUrl = `https://linkedin.com/feed/update/${platformPostId}`;
+      log.ok(`linkedin posted photo: ${platformUrl}`);
+    } catch (err) {
+      log.error(`linkedin photo upload failed — ${err.message}`);
+      platformPostId = `linkedin_${cryptoId()}`;
+      platformUrl = `https://linkedin.com/feed/update/${platformPostId}`;
+    }
+  } else {
+    log.mock(`linkedin photo upload (videoId: ${videoId})`);
+    platformPostId = `linkedin_${cryptoId()}`;
+    platformUrl = `https://linkedin.com/feed/update/${platformPostId}`;
+  }
+
+  const row = {
+    video_id: videoId,
+    platform: PLATFORM,
+    status: 'posted',
+    platform_post_id: platformPostId,
+    platform_url: platformUrl,
+    posted_at: new Date().toISOString(),
+    scheduled_for: null,
+    title: strategy?.title || '',
+    caption: fullCaption,
+    hashtags,
+    utm_link: utm,
+    format: ORIENTATION,
+    content_type: 'photo',
+  };
+
+  try {
+    const record = await dbInsert('posts', row);
+    log.ok(`linkedin posts row saved: ${record?.id ?? '(no id)'}`);
+    return record ?? { platform: PLATFORM, ...row };
+  } catch (err) {
+    log.error(`linkedin dbInsert failed — ${err.message}`);
+    return { platform: PLATFORM, ...row };
+  }
+}
+
 export default uploadToLinkedIn;
 
 // ---- main guard -------------------------------------------------------------

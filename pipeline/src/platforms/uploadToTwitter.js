@@ -259,6 +259,142 @@ export async function uploadToTwitter({ videoId, strategy, files, thumbnails }) 
   }
 }
 
+/**
+ * Photo-post variant — same chunked v1.1 media/upload flow, media_category
+ * 'tweet_image' instead of 'tweet_video'. Images process synchronously on
+ * Twitter's side, so (unlike the video path) there's no STATUS polling loop
+ * after FINALIZE.
+ */
+export async function uploadPhotoToTwitter({ videoId, strategy, files }) {
+  const utm = `https://stackdstudiosai.com/?utm_source=${PLATFORM}&utm_medium=social&utm_campaign=${videoId}`;
+  const file = files?.[ORIENTATION] ?? files?.square ?? files?.landscape ?? null;
+
+  const baseCaption = strategy?.captions?.[PLATFORM] || strategy?.recommendedHook || strategy?.title || '';
+  const hashtags = strategy?.hashtags?.[PLATFORM] || [];
+  const hashtagStr = hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ');
+  const captionWithTags = hashtagStr ? `${baseCaption} ${hashtagStr}` : baseCaption;
+  const tweetText = buildTweetText(captionWithTags, utm);
+
+  let platformPostId;
+  let platformUrl;
+
+  const cred = await getPlatformCredential(PLATFORM);
+
+  if (cred?.accessToken && cred?.tokenSecret) {
+    const sign = (method, url, params) => signOAuth1(method, url, params, {
+      token: cred.accessToken,
+      tokenSecret: cred.tokenSecret,
+    });
+
+    try {
+      let mediaId = null;
+
+      let imageBuffer = null;
+      if (file) {
+        try { imageBuffer = await readFile(join(process.cwd(), file)); }
+        catch (e) { log.warn(`twitter readFile ${file}: ${e.message}`); }
+      }
+
+      if (imageBuffer) {
+        const MEDIA_UPLOAD_URL = 'https://upload.twitter.com/1.1/media/upload.json';
+
+        const initParams = {
+          command: 'INIT',
+          total_bytes: String(imageBuffer.length),
+          media_type: 'image/png',
+          media_category: 'tweet_image',
+        };
+        const initRes = await fetchJSON(MEDIA_UPLOAD_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: sign('POST', MEDIA_UPLOAD_URL, initParams),
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams(initParams).toString(),
+        });
+        mediaId = String(initRes.media_id_string);
+
+        const appendForm = new FormData();
+        appendForm.append('command', 'APPEND');
+        appendForm.append('media_id', mediaId);
+        appendForm.append('segment_index', '0');
+        appendForm.append('media', new Blob([imageBuffer], { type: 'image/png' }), 'photo.png');
+        const appendRes = await fetch(MEDIA_UPLOAD_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: sign('POST', MEDIA_UPLOAD_URL, { command: 'APPEND', media_id: mediaId, segment_index: '0' }),
+          },
+          body: appendForm,
+        });
+        if (!appendRes.ok) {
+          const errText = await appendRes.text();
+          throw new Error(`Twitter APPEND failed ${appendRes.status}: ${errText.slice(0, 200)}`);
+        }
+
+        const finalizeParams = { command: 'FINALIZE', media_id: mediaId };
+        await fetchJSON(MEDIA_UPLOAD_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: sign('POST', MEDIA_UPLOAD_URL, finalizeParams),
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams(finalizeParams).toString(),
+        });
+      }
+
+      const tweetBody = { text: tweetText };
+      if (mediaId) tweetBody.media = { media_ids: [mediaId] };
+
+      const TWEET_URL = 'https://api.twitter.com/2/tweets';
+      const tweetRes = await fetchJSON(TWEET_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: sign('POST', TWEET_URL),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(tweetBody),
+      });
+
+      platformPostId = tweetRes?.data?.id ?? `twitter_${cryptoId()}`;
+      platformUrl = `https://x.com/stackdstudios/status/${platformPostId}`;
+      log.ok(`twitter posted photo: ${platformUrl}`);
+    } catch (err) {
+      log.error(`twitter photo upload failed — ${err.message}`);
+      platformPostId = `twitter_${cryptoId()}`;
+      platformUrl = `https://x.com/stackdstudios/status/${platformPostId}`;
+    }
+  } else {
+    log.mock(`twitter photo upload (videoId: ${videoId})`);
+    platformPostId = `twitter_${cryptoId()}`;
+    platformUrl = `https://x.com/stackdstudios/status/${platformPostId}`;
+  }
+
+  const row = {
+    video_id: videoId,
+    platform: PLATFORM,
+    status: 'posted',
+    platform_post_id: platformPostId,
+    platform_url: platformUrl,
+    posted_at: new Date().toISOString(),
+    scheduled_for: null,
+    title: strategy?.title || '',
+    caption: tweetText,
+    hashtags,
+    utm_link: utm,
+    format: ORIENTATION,
+    content_type: 'photo',
+  };
+
+  try {
+    const record = await dbInsert('posts', row);
+    log.ok(`twitter posts row saved: ${record?.id ?? '(no id)'}`);
+    return record ?? { platform: PLATFORM, ...row };
+  } catch (err) {
+    log.error(`twitter dbInsert failed — ${err.message}`);
+    return { platform: PLATFORM, ...row };
+  }
+}
+
 export default uploadToTwitter;
 
 // ---- main guard -------------------------------------------------------------

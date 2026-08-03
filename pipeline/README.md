@@ -109,7 +109,7 @@ cd ../dashboard && npm run dev      # http://localhost:3030
 ```bash
 cd pipeline
 node src/index.js "The 3-tool AI stack that runs my agency" --format short --pillar "AI Automation"
-# flags: --format short|medium|long   --pillar "<name>"   --platforms youtube,tiktok   --autopost
+# flags: --format short|medium|long   --content-type video|photo   --pillar "<name>"   --platforms youtube,tiktok   --autopost
 ```
 
 Force full demo mode (mocks even if keys exist):
@@ -117,13 +117,34 @@ Force full demo mode (mocks even if keys exist):
 PIPELINE_DEMO=true node src/index.js "Any topic"
 ```
 
+### Photo posts (`--content-type photo`)
+
+A second content type alongside the default `video` one, for a single-image post
+instead of a full script+voiceover+render pipeline:
+
+| Stage | Video (`--content-type video`, default) | Photo (`--content-type photo`) |
+|---|---|---|
+| Strategy | `generateScript.js` — hooks, full script, timestamped shot list, captions/hashtags/SEO, virality score | Same file, lighter branch — hooks, a single `imagePrompt`, captions/hashtags/SEO, virality score. No script, no shot list. |
+| Voiceover | `generateVoice.js` (ElevenLabs) | Skipped entirely. |
+| Media / thumbnail | `gatherMedia.js` (b-roll) + `generateThumbnail.js` (DALL·E options for a video thumbnail) | Skipped — `generatePhotos.js` renders the post image itself, not a thumbnail for something else. |
+| Render | `renderVideo.js` (Remotion → 3 MP4 orientations) | `generatePhotos.js` (DALL·E 3 → 3 image orientations, one call per size) — returns the exact same `{landscape, vertical, square}` shape `renderVideo` does, so `postToPlatforms` and every uploader's `files[ORIENTATION]` lookup need no change. |
+| Virality gate | `viralityCheck.js` | Same file, unchanged — score/threshold logic doesn't care what medium the content is. |
+| Posting | `platforms/*.js`'s `uploadTo*` functions | Each of the 5 photo-capable platforms exports a second `uploadPhotoTo*` function hitting that platform's real photo endpoint (simpler than video in every case — no resumable upload, no processing wait for images). **YouTube has no photo-post equivalent and is automatically dropped** from `enabledPlatforms` for photo runs (`platforms/index.js`'s `PHOTO_UPLOADER_MAP` has no `youtube` entry; `runPipeline` and `postToPlatforms` both filter it out defensively, logging a warning). |
+| Repurpose | `repurpose.js` (blog/thread/newsletter/FFmpeg clips/quote cards) | Skipped — those outputs need the video+VO, not a single image. |
+
+Instagram and TikTok's photo endpoints only accept a publicly reachable image URL
+(no direct file-bytes upload for photos, unlike video) — set `INSTAGRAM_VIDEO_BASE_URL`
+(also reused as the photo base) and `TIKTOK_PHOTO_BASE_URL` to wherever `/output/photos`
+gets served from once you're posting real images, not mocks.
+
 ### The pipeline — via HTTP (so the dashboard's Run Pipeline button can trigger it)
 ```bash
 npm run server         # listens on PORT (default 4040)
 ```
 Then set `PIPELINE_WEBHOOK_URL=http://localhost:4040/run` and `APP_URL=http://localhost:3030`
 in `dashboard/.env.local`.
-Endpoints: `POST /run` (body `{topic,format,pillar,platforms,autoPost}`),
+Endpoints: `POST /run` (body `{topic,format,contentType,pillar,platforms,autoPost}` —
+`contentType` is `'video'` (default) or `'photo'`),
 `POST /lead` (lead-magnet capture),
 `POST /approve/:videoId` (resume posting for a flagged video — dashboard's
 Approve & Post button),

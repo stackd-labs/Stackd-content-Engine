@@ -109,6 +109,89 @@ export async function uploadToFacebook({ videoId, strategy, files, thumbnails })
   }
 }
 
+/**
+ * Photo-post variant — POST /{page-id}/photos, multipart. Simpler than the
+ * video path: no resumable upload, no processing wait, publishes immediately.
+ */
+export async function uploadPhotoToFacebook({ videoId, strategy, files }) {
+  const utm = `https://stackdstudiosai.com/?utm_source=${PLATFORM}&utm_medium=social&utm_campaign=${videoId}`;
+  const file = files?.[ORIENTATION] ?? files?.square ?? files?.landscape ?? null;
+
+  const baseCaption = strategy?.captions?.[PLATFORM] || strategy?.recommendedHook || strategy?.title || '';
+  const hashtags = strategy?.hashtags?.[PLATFORM] || [];
+  const hashtagStr = hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ');
+  const description = strategy?.seo?.description || baseCaption;
+  const fullCaption = `${description}\n\n${utm}\n\n${hashtagStr}`.slice(0, 63206);
+
+  let platformPostId;
+  let platformUrl;
+
+  if (has('FACEBOOK_PAGE_ID', 'FACEBOOK_PAGE_ACCESS_TOKEN')) {
+    try {
+      const pageId = env.FACEBOOK_PAGE_ID;
+      const pageToken = env.FACEBOOK_PAGE_ACCESS_TOKEN;
+
+      let imageBuffer = null;
+      if (file) {
+        try { imageBuffer = await readFile(join(process.cwd(), file)); }
+        catch (e) { log.warn(`facebook readFile ${file}: ${e.message}`); }
+      }
+      if (!imageBuffer) throw new Error('No image file buffer available for Facebook photo upload');
+
+      const form = new FormData();
+      form.append('caption', fullCaption);
+      form.append('access_token', pageToken);
+      form.append('published', 'true');
+      form.append('source', new Blob([imageBuffer], { type: 'image/png' }), 'photo.png');
+
+      const uploadRes = await fetch(`${GRAPH_BASE}/${pageId}/photos`, { method: 'POST', body: form });
+      const uploadBody = await uploadRes.text();
+      let uploadJson;
+      try { uploadJson = JSON.parse(uploadBody); } catch { uploadJson = { raw: uploadBody }; }
+      if (!uploadRes.ok) {
+        throw new Error(`Facebook photo upload failed ${uploadRes.status}: ${uploadBody.slice(0, 200)}`);
+      }
+
+      platformPostId = uploadJson?.post_id ?? uploadJson?.id ?? `facebook_${cryptoId()}`;
+      platformUrl = `https://facebook.com/${platformPostId}`;
+      log.ok(`facebook posted photo: ${platformUrl}`);
+    } catch (err) {
+      log.error(`facebook photo upload failed — ${err.message}`);
+      platformPostId = `facebook_${cryptoId()}`;
+      platformUrl = `https://facebook.com/${platformPostId}`;
+    }
+  } else {
+    log.mock(`facebook photo upload (videoId: ${videoId})`);
+    platformPostId = `facebook_${cryptoId()}`;
+    platformUrl = `https://facebook.com/${platformPostId}`;
+  }
+
+  const row = {
+    video_id: videoId,
+    platform: PLATFORM,
+    status: 'posted',
+    platform_post_id: platformPostId,
+    platform_url: platformUrl,
+    posted_at: new Date().toISOString(),
+    scheduled_for: null,
+    title: strategy?.title || '',
+    caption: fullCaption,
+    hashtags,
+    utm_link: utm,
+    format: ORIENTATION,
+    content_type: 'photo',
+  };
+
+  try {
+    const record = await dbInsert('posts', row);
+    log.ok(`facebook posts row saved: ${record?.id ?? '(no id)'}`);
+    return record ?? { platform: PLATFORM, ...row };
+  } catch (err) {
+    log.error(`facebook dbInsert failed — ${err.message}`);
+    return { platform: PLATFORM, ...row };
+  }
+}
+
 export default uploadToFacebook;
 
 // ---- main guard -------------------------------------------------------------

@@ -22,6 +22,7 @@ export const audioPath = (videoId) => join(audioDir(), `${videoId}.mp3`);
 export const videoDir = (videoId) => ensure(join(OUTPUT_DIR, 'videos', videoId));
 export const mediaDir = (videoId) => ensure(join(OUTPUT_DIR, 'media', videoId));
 export const thumbnailDir = (videoId) => ensure(join(OUTPUT_DIR, 'thumbnails', videoId));
+export const photoDir = (videoId) => ensure(join(OUTPUT_DIR, 'photos', videoId));
 export const repurposeDir = (videoId) => ensure(join(OUTPUT_DIR, 'repurpose', videoId));
 export const clipsDir = (videoId) => ensure(join(videoDir(videoId), 'clips'));
 

@@ -15,6 +15,9 @@ export type VideoStatus =
 
 export type VideoFormat = 'short' | 'medium' | 'long';
 
+// 'photo' content skips voiceover + render entirely — see pipeline/README.md § Photo posts.
+export type ContentType = 'video' | 'photo';
+
 export type Platform =
   | 'youtube'
   | 'tiktok'
@@ -68,6 +71,7 @@ export interface Video {
   published_at: string | null;
   duration_seconds: number | null;
   format: VideoFormat;
+  content_type: ContentType;
   thumbnail_url: string | null;
   video_file_path: string | null;
   audio_file_path: string | null;
@@ -95,6 +99,7 @@ export interface Post {
   hashtags: string[];
   utm_link: string | null;
   format: PostFormat;
+  content_type: ContentType;
 }
 
 export interface Analytics {

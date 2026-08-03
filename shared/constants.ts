@@ -2,7 +2,7 @@
 // Shared constants for the Stackd Content Engine.
 // ============================================================
 
-import type { Platform, VideoFormat } from './types';
+import type { ContentType, Platform, VideoFormat } from './types';
 
 export const PLATFORMS: Platform[] = [
   'youtube',
@@ -14,6 +14,19 @@ export const PLATFORMS: Platform[] = [
 ];
 
 export const FORMATS: VideoFormat[] = ['short', 'medium', 'long'];
+
+export const CONTENT_TYPES: ContentType[] = ['video', 'photo'];
+
+// YouTube has no photo-post equivalent in this pipeline's posting flow (Community
+// image posts are a separate, unrelated API) — every other platform's uploader
+// implements a real photo endpoint. Photo runs filter enabledPlatforms through this.
+export const PHOTO_CAPABLE_PLATFORMS: Platform[] = [
+  'tiktok',
+  'instagram',
+  'linkedin',
+  'facebook',
+  'twitter',
+];
 
 // The 12 pipeline stages a video moves through, in order.
 export const PIPELINE_STAGES = [

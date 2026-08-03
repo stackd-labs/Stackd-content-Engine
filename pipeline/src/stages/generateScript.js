@@ -39,6 +39,45 @@ function summariseSearch(results) {
 }
 
 // ---------------------------------------------------------------------------
+// Mock object — photo mode (no script/shotList/voiceover — see buildMock below
+// for the video-mode equivalent)
+// ---------------------------------------------------------------------------
+
+function buildMockPhoto(topic) {
+  return {
+    hooks: [
+      { style: 'controversy', text: `Most founders are automating the WRONG things — and it's killing their momentum.` },
+      { style: 'number hook', text: `3 AI automation moves that saved my agency 14 hours a week.` },
+      { style: 'story open', text: `Six months ago I was manually writing every proposal. Then I built one system.` },
+    ],
+    recommendedHookIndex: 1,
+    imagePrompt: `Bold, high-contrast graphic illustrating "${topic}". Confident founder-facing visual with navy and gold accents, strong focal subject, minimal text space reserved on one side, photorealistic, no watermarks.`,
+    captions: {
+      youtube: `${topic} — the full breakdown. #AIAutomation #StackdStudios`,
+      tiktok: `POV: you stopped doing manual work and built systems instead 🤖 #AIAutomation #FounderLife`,
+      instagram: `${topic}. Save this for later. 🙌 #AIAutomation #FounderMindset #StackdStudios`,
+      linkedin: `A quick breakdown of ${topic} — and why it matters for founders building systems, not just doing tasks.`,
+      facebook: `🚨 ${topic} — here's what you need to know. Drop a comment if you want the full breakdown.`,
+      twitter: `${topic} in one image 👇`,
+    },
+    hashtags: {
+      youtube: ['AIAutomation', 'StackdStudios'],
+      tiktok: ['AIAutomation', 'FounderLife', 'BusinessTips'],
+      instagram: ['AIAutomation', 'FounderMindset', 'StackdStudios'],
+      linkedin: ['AIAutomation', 'Entrepreneurship'],
+      facebook: ['AIAutomation', 'FounderTools'],
+      twitter: ['AIAutomation'],
+    },
+    seo: {
+      title: `${topic} | Stackd Studios`,
+      description: `A quick, high-signal breakdown of ${topic} for founders and builders.`,
+    },
+    viralityScore: 7,
+    viralityReasoning: `Single bold-claim visual with a specific topic anchor tends to perform well for saves/shares in the founder niche.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Mock object — fully populated, genuinely useful for demo mode
 // ---------------------------------------------------------------------------
 
@@ -128,8 +167,12 @@ function buildMock(topic, durationSeconds) {
 // Main export
 // ---------------------------------------------------------------------------
 
-export async function generateScript({ topic, format = 'short', contentPillar }) {
+export async function generateScript({ topic, format = 'short', contentPillar, contentType = 'video' }) {
   log.stage('generateScript', topic);
+
+  if (contentType === 'photo') {
+    return generatePhotoStrategy({ topic, contentPillar });
+  }
 
   // 1. Resolve duration + settings
   const durationConfig = FORMAT_DURATIONS[format] ?? FORMAT_DURATIONS.short;
@@ -255,6 +298,7 @@ animationBullets should be 2-4 short punchy phrases (max 5 words each) for text 
       script: raw.script ?? '',
       status: 'producing',
       format,
+      content_type: 'video',
       hook_style: hookStyle,
       content_pillar: resolvedPillar,
       virality_score: raw.viralityScore ?? null,
@@ -282,6 +326,7 @@ animationBullets should be 2-4 short punchy phrases (max 5 words each) for text 
     title,
     topic,
     format,
+    contentType: 'video',
     contentPillar: resolvedPillar,
     hooks: raw.hooks ?? mock.hooks,
     recommendedHookIndex,
@@ -295,6 +340,126 @@ animationBullets should be 2-4 short punchy phrases (max 5 words each) for text 
     viralityScore: raw.viralityScore ?? mock.viralityScore,
     viralityReasoning: raw.viralityReasoning ?? mock.viralityReasoning,
     durationSeconds,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Photo-mode strategy — no script, no shot list, no voiceover-driven timing.
+// Just a hook, a single image concept, and per-platform captions/hashtags/SEO.
+// generatePhotos.js turns imagePrompt into the actual DALL·E renders.
+// ---------------------------------------------------------------------------
+async function generatePhotoStrategy({ topic, contentPillar }) {
+  const settings = getSettings();
+  const hookStyles = settings.hookStyles?.length ? settings.hookStyles : HOOK_STYLES;
+  const brandVoice = settings.brand?.voicePersona ?? 'Direct, confident, and empowering — a builder talking to builders. Cut the fluff; lead with systems and proof.';
+  const resolvedPillar = contentPillar ?? settings.contentPillars?.[0] ?? 'AI Automation';
+
+  const system = `You are Stackd Studios' senior content strategist. This is a single-image / photo post, not a video — there is no script, voiceover, or shot list.
+Brand voice persona: ${brandVoice}
+Content pillar for this piece: ${resolvedPillar}
+Respond with ONLY valid minified JSON matching the exact schema specified in the user message.`;
+
+  const prompt = `Topic: "${topic}"
+Content pillar: ${resolvedPillar}
+
+Produce a JSON object with EXACTLY these fields (no extras, no missing):
+
+{
+  "hooks": [
+    { "style": "<one of: ${hookStyles.slice(0, 6).join(', ')}>", "text": "<hook text>" },
+    { "style": "<different style>", "text": "<hook text>" },
+    { "style": "<different style>", "text": "<hook text>" }
+  ],
+  "recommendedHookIndex": <0|1|2 — index of the strongest hook>,
+  "imagePrompt": "<a single detailed visual description for an AI image generator — the actual post image, not a thumbnail>",
+  "captions": {
+    "youtube": "<caption for a YouTube Community-style image post>",
+    "tiktok": "<punchy caption, 3-6 hashtags>",
+    "instagram": "<engaging caption with line breaks, 5-8 hashtags>",
+    "linkedin": "<professional caption, minimal hashtags>",
+    "facebook": "<conversational caption, 2-4 hashtags>",
+    "twitter": "<under 280 chars, 2-3 hashtags>"
+  },
+  "hashtags": {
+    "youtube": ["<tag>"],
+    "tiktok": ["<tag>"],
+    "instagram": ["<tag>"],
+    "linkedin": ["<tag>"],
+    "facebook": ["<tag>"],
+    "twitter": ["<tag>"]
+  },
+  "seo": {
+    "title": "<short title, under 70 chars>",
+    "description": "<1-2 sentence description>"
+  },
+  "viralityScore": <integer 1-10>,
+  "viralityReasoning": "<1-2 sentences explaining the score>"
+}
+
+Use each hook style only once across the three hooks. All three hooks must use DIFFERENT styles.`;
+
+  const mock = buildMockPhoto(topic);
+
+  let raw;
+  try {
+    raw = await generateJSON({ system, prompt, maxTokens: 1500, mock });
+  } catch (err) {
+    log.warn(`generateJSON threw unexpectedly: ${err.message} — using mock`);
+    raw = mock;
+  }
+
+  const recommendedHookIndex = typeof raw.recommendedHookIndex === 'number'
+    ? Math.max(0, Math.min(2, raw.recommendedHookIndex))
+    : 0;
+  const recommendedHook = raw.hooks?.[recommendedHookIndex]?.text ?? raw.hooks?.[0]?.text ?? '';
+  const hookStyle = raw.hooks?.[recommendedHookIndex]?.style ?? raw.hooks?.[0]?.style ?? 'bold claim';
+  const title = raw.seo?.title || `${topic} — photo`;
+
+  let videoId;
+  try {
+    const record = await dbInsert('videos', {
+      title,
+      topic,
+      script: '',
+      status: 'producing',
+      format: 'short',
+      content_type: 'photo',
+      hook_style: hookStyle,
+      content_pillar: resolvedPillar,
+      virality_score: raw.viralityScore ?? null,
+      duration_seconds: null,
+      run_log: [],
+    });
+    videoId = record?.id ?? cryptoId();
+  } catch (err) {
+    log.warn(`dbInsert videos (photo) failed: ${err.message}`);
+    videoId = cryptoId();
+  }
+
+  try {
+    await appendVideoLog(videoId, 'script', 'done', 'Generated 3 hooks + image prompt (photo mode)');
+  } catch (err) {
+    log.warn(`appendVideoLog failed: ${err.message}`);
+  }
+
+  log.ok(`generateScript (photo) done — videoId ${videoId}, virality ${raw.viralityScore ?? '?'}/10`);
+
+  return {
+    videoId,
+    title,
+    topic,
+    contentType: 'photo',
+    contentPillar: resolvedPillar,
+    hooks: raw.hooks ?? mock.hooks,
+    recommendedHookIndex,
+    recommendedHook,
+    hookStyle,
+    imagePrompt: raw.imagePrompt ?? mock.imagePrompt,
+    captions: raw.captions ?? mock.captions,
+    hashtags: raw.hashtags ?? mock.hashtags,
+    seo: raw.seo ?? mock.seo,
+    viralityScore: raw.viralityScore ?? mock.viralityScore,
+    viralityReasoning: raw.viralityReasoning ?? mock.viralityReasoning,
   };
 }
 

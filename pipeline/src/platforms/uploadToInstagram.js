@@ -145,6 +145,103 @@ export async function uploadToInstagram({ videoId, strategy, files, thumbnails }
   }
 }
 
+/**
+ * Photo-post variant — Instagram Graph API media container with
+ * media_type: IMAGE + image_url instead of REELS + video_url. Unlike Reels,
+ * plain feed image posts publish immediately (the Graph API does not support
+ * scheduling a bare IMAGE container the way it does Reels) — see the
+ * `publish_date` note in uploadToInstagram above, intentionally omitted here.
+ */
+export async function uploadPhotoToInstagram({ videoId, strategy, files }) {
+  const utm = `https://stackdstudiosai.com/?utm_source=${PLATFORM}&utm_medium=social&utm_campaign=${videoId}`;
+  const file = files?.[ORIENTATION] ?? files?.square ?? files?.landscape ?? null;
+
+  const baseCaption = strategy?.captions?.[PLATFORM] || strategy?.recommendedHook || strategy?.title || '';
+  const hashtags = strategy?.hashtags?.[PLATFORM] || [];
+  const hashtagStr = hashtags.map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ');
+  const fullCaption = `${baseCaption}\n\n${hashtagStr}`.slice(0, 2200);
+
+  let platformPostId;
+  let platformUrl;
+
+  if (has('INSTAGRAM_ACCESS_TOKEN', 'INSTAGRAM_ACCOUNT_ID')) {
+    try {
+      const accessToken = env.INSTAGRAM_ACCESS_TOKEN;
+      const accountId = env.INSTAGRAM_ACCOUNT_ID;
+
+      const imageBaseUrl = env.INSTAGRAM_VIDEO_BASE_URL || 'https://cdn.stackdstudiosai.com/photos';
+      const imagePublicUrl = file
+        ? `${imageBaseUrl}/${file.replace(/\\/g, '/').split('/').pop()}`
+        : null;
+      if (!imagePublicUrl) throw new Error('No public image URL available for Instagram photo upload');
+
+      const containerRes = await fetchJSON(
+        `${GRAPH_BASE}/${accountId}/media`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            media_type: 'IMAGE',
+            image_url: imagePublicUrl,
+            caption: fullCaption,
+            access_token: accessToken,
+          }).toString(),
+        },
+      );
+      const containerId = containerRes.id;
+      if (!containerId) throw new Error('Instagram did not return container id');
+
+      await waitForContainer(containerId, accessToken);
+
+      const publishRes = await fetchJSON(
+        `${GRAPH_BASE}/${accountId}/media_publish`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ creation_id: containerId, access_token: accessToken }).toString(),
+        },
+      );
+
+      platformPostId = publishRes.id ?? containerId;
+      platformUrl = `https://instagram.com/p/${platformPostId}`;
+      log.ok(`instagram posted photo: ${platformUrl}`);
+    } catch (err) {
+      log.error(`instagram photo upload failed — ${err.message}`);
+      platformPostId = `instagram_${cryptoId()}`;
+      platformUrl = `https://instagram.com/p/${platformPostId}`;
+    }
+  } else {
+    log.mock(`instagram photo upload (videoId: ${videoId})`);
+    platformPostId = `instagram_${cryptoId()}`;
+    platformUrl = `https://instagram.com/p/${platformPostId}`;
+  }
+
+  const row = {
+    video_id: videoId,
+    platform: PLATFORM,
+    status: 'posted',
+    platform_post_id: platformPostId,
+    platform_url: platformUrl,
+    posted_at: new Date().toISOString(),
+    scheduled_for: null,
+    title: strategy?.title || '',
+    caption: fullCaption,
+    hashtags,
+    utm_link: utm,
+    format: ORIENTATION,
+    content_type: 'photo',
+  };
+
+  try {
+    const record = await dbInsert('posts', row);
+    log.ok(`instagram posts row saved: ${record?.id ?? '(no id)'}`);
+    return record ?? { platform: PLATFORM, ...row };
+  } catch (err) {
+    log.error(`instagram dbInsert failed — ${err.message}`);
+    return { platform: PLATFORM, ...row };
+  }
+}
+
 export default uploadToInstagram;
 
 // ---- main guard -------------------------------------------------------------

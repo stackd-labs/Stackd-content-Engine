@@ -154,7 +154,7 @@ async function handleRequest(req, res) {
       return json(res, 400, { ok: false, error: err.message });
     }
 
-    const { topic, format, pillar, contentPillar, platforms, autoPost } = body;
+    const { topic, format, contentType, pillar, contentPillar, platforms, autoPost } = body;
 
     if (!topic || typeof topic !== 'string' || !topic.trim()) {
       return json(res, 400, { ok: false, error: '"topic" is required and must be a non-empty string' });
@@ -166,6 +166,7 @@ async function handleRequest(req, res) {
     runPipeline({
       topic: topic.trim(),
       format: format || 'short',
+      contentType: contentType === 'photo' ? 'photo' : 'video',
       contentPillar: contentPillar || pillar,
       platforms: Array.isArray(platforms) ? platforms : undefined,
       autoPost: Boolean(autoPost),

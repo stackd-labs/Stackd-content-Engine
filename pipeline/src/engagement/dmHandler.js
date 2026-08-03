@@ -10,6 +10,10 @@
 import { generateText, generateJSON } from '../lib/ai.js';
 import { dbInsert, dbUpdate, dbSelect } from '../lib/supabase.js';
 import { getSettings } from '../lib/settings.js';
+import { env, has } from '../lib/env.js';
+import { fetchJSON } from '../lib/http.js';
+import { getPlatformCredential } from '../lib/credentials.js';
+import { signOAuth1 } from '../platforms/uploadToTwitter.js';
 import { log } from '../lib/logger.js';
 
 // ---------------------------------------------------------------------------
@@ -23,6 +27,87 @@ function handleToName(handle) {
 }
 
 // ---------------------------------------------------------------------------
+// sendDM — the actual delivery step. Every drafted message that gets
+// pushed into a lead's conversation_log is sent here first, so what the
+// dashboard shows as "sent" really went out.
+//
+// twitter:              resolve @handle -> user id, then the DM API — works
+//                        for any handle at any point in the conversation.
+// instagram / facebook: Meta's Private Replies API turns a specific PUBLIC
+//                        COMMENT into a DM. That only works for the opening
+//                        message (we have the triggering comment's id);
+//                        there is no PSID to message an arbitrary handle
+//                        directly, so follow-ups on these platforms are
+//                        logged, not delivered.
+// tiktok / linkedin / youtube: no send-message API available to this app
+//                        with the credentials this project supports.
+// ---------------------------------------------------------------------------
+async function sendTwitterDM(handle, message, cred) {
+  const sign = (method, url) => signOAuth1(method, url, {}, { token: cred.accessToken, tokenSecret: cred.tokenSecret });
+
+  const username = handle.replace(/^@/, '');
+  const lookupUrl = `https://api.twitter.com/2/users/by/username/${encodeURIComponent(username)}`;
+  const user = await fetchJSON(lookupUrl, { headers: { Authorization: sign('GET', lookupUrl) } });
+  const participantId = user?.data?.id;
+  if (!participantId) throw new Error(`could not resolve Twitter user id for ${handle}`);
+
+  const dmUrl = `https://api.twitter.com/2/dm_conversations/with/${participantId}/messages`;
+  await fetchJSON(dmUrl, {
+    method: 'POST',
+    headers: { Authorization: sign('POST', dmUrl), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: message }),
+  });
+}
+
+async function sendMetaPrivateReply(platform, platformCommentId, message) {
+  const token = platform === 'instagram' ? env.INSTAGRAM_ACCESS_TOKEN : env.FACEBOOK_PAGE_ACCESS_TOKEN;
+  await fetchJSON(`https://graph.facebook.com/v19.0/${encodeURIComponent(platformCommentId)}/private_replies`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ message, access_token: token }).toString(),
+  });
+}
+
+/**
+ * @param {{ platform: string, handle: string, message: string, platformCommentId?: string|null }} opts
+ * @returns {Promise<{ delivered: boolean, reason?: string }>}
+ */
+export async function sendDM({ platform, handle, message, platformCommentId = null }) {
+  try {
+    if (platform === 'twitter') {
+      const cred = await getPlatformCredential('twitter');
+      if (cred?.accessToken && cred?.tokenSecret) {
+        await sendTwitterDM(handle, message, cred);
+        log.ok(`dmHandler: DM delivered to ${handle} via twitter`);
+        return { delivered: true };
+      }
+    }
+
+    if (
+      (platform === 'instagram' && has('INSTAGRAM_ACCESS_TOKEN')) ||
+      (platform === 'facebook' && has('FACEBOOK_PAGE_ACCESS_TOKEN'))
+    ) {
+      if (!platformCommentId) {
+        log.warn(
+          `dmHandler: no source comment id for ${handle} on ${platform} — private-reply DMs require ` +
+          `the triggering comment, so this follow-up can't be delivered live`,
+        );
+        return { delivered: false, reason: 'no platformCommentId' };
+      }
+      await sendMetaPrivateReply(platform, platformCommentId, message);
+      log.ok(`dmHandler: DM delivered to ${handle} via ${platform} private reply`);
+      return { delivered: true };
+    }
+
+    log.mock(`DM send to ${handle} via ${platform}`);
+    return { delivered: false, reason: 'no send API configured for this platform' };
+  } catch (err) {
+    log.error(`dmHandler.sendDM failed for ${handle} on ${platform}: ${err.message}`);
+    return { delivered: false, reason: err.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // startDmSequence
 // ---------------------------------------------------------------------------
 /**
@@ -33,6 +118,7 @@ function handleToName(handle) {
  * @param {string|null} params.sourceVideoId
  * @param {string|null} params.sourcePostId
  * @param {string} params.commentText
+ * @param {string|null} params.platformCommentId — needed for instagram/facebook private-reply delivery
  * @returns {Promise<object|null>}       — inserted lead record
  */
 export async function startDmSequence({
@@ -42,6 +128,7 @@ export async function startDmSequence({
   sourceVideoId = null,
   sourcePostId = null,
   commentText = '',
+  platformCommentId = null,
 }) {
   try {
     log.stage('dmHandler', `startDmSequence → ${handle} (${platform}) trigger="${triggerWord}"`);
@@ -71,6 +158,8 @@ export async function startDmSequence({
       mock: mockDM,
     });
 
+    const sendResult = await sendDM({ platform, handle, message: initialDM, platformCommentId });
+
     const now = new Date().toISOString();
     const conversation_log = [{ role: 'agent', text: initialDM, at: now }];
 
@@ -88,7 +177,7 @@ export async function startDmSequence({
       created_at: now,
     });
 
-    log.ok(`dmHandler: lead created id=${lead?.id ?? 'n/a'} handle=${handle}`);
+    log.ok(`dmHandler: lead created id=${lead?.id ?? 'n/a'} handle=${handle} delivered=${sendResult.delivered}`);
     return lead;
   } catch (err) {
     log.error(`dmHandler.startDmSequence failed for ${handle}: ${err.message}`);
@@ -167,7 +256,8 @@ export async function handleDmReply({ leadId, message }) {
 
     const { reply, qualified, email } = result;
 
-    // --- 4. Build updated state ---------------------------------------------
+    // --- 4. Send + build updated state ---------------------------------------
+    const replySend = await sendDM({ platform: lead.source_platform, handle: lead.handle, message: reply });
     conversationLog.push({ role: 'agent', text: reply, at: new Date().toISOString() });
 
     let status = lead.status;
@@ -175,9 +265,11 @@ export async function handleDmReply({ leadId, message }) {
       status = 'qualified';
       // Append calendar link as a clear message if not already in reply
       if (!reply.includes(calLink)) {
+        const calMessage = `Book your free strategy call here: ${calLink}`;
+        await sendDM({ platform: lead.source_platform, handle: lead.handle, message: calMessage });
         conversationLog.push({
           role: 'agent',
-          text: `Book your free strategy call here: ${calLink}`,
+          text: calMessage,
           at: new Date().toISOString(),
         });
       }
@@ -193,7 +285,7 @@ export async function handleDmReply({ leadId, message }) {
     const updatedLead = await dbUpdate('leads', leadId, patch);
 
     log.ok(
-      `dmHandler: reply sent lead=${leadId} qualified=${qualified} status=${status}${email ? ` email=${email}` : ''}`,
+      `dmHandler: reply sent lead=${leadId} delivered=${replySend.delivered} qualified=${qualified} status=${status}${email ? ` email=${email}` : ''}`,
     );
 
     return { lead: updatedLead, reply, qualified, email: email ?? null };

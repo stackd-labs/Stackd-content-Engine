@@ -1,16 +1,17 @@
 // ============================================================
 // Platform uploader — YouTube
 // Uses the YouTube Data API v3 resumable upload flow (OAuth2).
-// Required env: YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET,
-//               YOUTUBE_REFRESH_TOKEN.
-// Falls back to mock when credentials are absent.
+// Credentials come from the dashboard's Connect flow (platform_credentials
+// table) if connected, else fall back to YOUTUBE_CLIENT_ID/SECRET/
+// REFRESH_TOKEN in .env — see pipeline/src/lib/credentials.js.
+// Falls back to mock when no credential is available either way.
 // ============================================================
 import { pathToFileURL } from 'node:url';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fetchJSON } from '../lib/http.js';
 import { dbInsert, cryptoId } from '../lib/supabase.js';
-import { env, has } from '../lib/env.js';
+import { getPlatformCredential } from '../lib/credentials.js';
 import { log } from '../lib/logger.js';
 import { PLATFORM_ORIENTATION } from '../lib/constants.js';
 
@@ -71,20 +72,11 @@ export async function uploadToYouTube({ videoId, strategy, files, thumbnails }) 
   let platformPostId;
   let platformUrl;
 
-  if (has('YOUTUBE_CLIENT_ID', 'YOUTUBE_CLIENT_SECRET', 'YOUTUBE_REFRESH_TOKEN')) {
+  const cred = await getPlatformCredential(PLATFORM);
+
+  if (cred?.accessToken) {
     try {
-      // Step 1: Exchange refresh token for access token.
-      const tokenRes = await fetchJSON('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          client_id: env.YOUTUBE_CLIENT_ID,
-          client_secret: env.YOUTUBE_CLIENT_SECRET,
-          refresh_token: env.YOUTUBE_REFRESH_TOKEN,
-          grant_type: 'refresh_token',
-        }).toString(),
-      });
-      const accessToken = tokenRes.access_token;
+      const accessToken = cred.accessToken;
 
       // Step 2: Initiate resumable upload session.
       // POST https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status

@@ -8,7 +8,7 @@
 // ============================================================
 import { pathToFileURL } from 'node:url';
 
-import { createRun, updateRunStage, completeRun, failRun, setVideoStatus } from './lib/runState.js';
+import { createRun, updateRunStage, completeRun, failRun, setVideoStatus, updateVideo } from './lib/runState.js';
 import { getSettings } from './lib/settings.js';
 import { notify } from './lib/notify.js';
 import { log } from './lib/logger.js';
@@ -83,8 +83,19 @@ export async function runPipeline({ topic, format = 'short', contentPillar, plat
     });
     await updateRunStage(runId, 'virality_check', 'done');
 
+    const enabled = platforms || getSettings().enabledPlatforms;
+
     // If not approved, pause here — dashboard approval resumes posting later.
+    // Snapshot everything postToPlatforms needs so the "Approve & Post"
+    // button can re-enter it later without re-running the earlier stages.
     if (!vc.approved) {
+      try {
+        await updateVideo(videoId, {
+          pending_post_payload: { strategy, files, thumbnails: thumbs, platforms: enabled },
+        });
+      } catch (err) {
+        log.warn(`runPipeline: could not save pending_post_payload — ${err.message}`);
+      }
       await updateRunStage(runId, 'post', 'done', 'paused for approval');
       await completeRun(runId, '(paused for approval)');
       return { runId, videoId, status: 'flagged', reason: vc.reason };
@@ -93,7 +104,6 @@ export async function runPipeline({ topic, format = 'short', contentPillar, plat
     // ── 8. Post to platforms ──────────────────────────────────
     await updateRunStage(runId, 'post', 'running');
     await setVideoStatus(videoId, 'posting');
-    const enabled = platforms || getSettings().enabledPlatforms;
     const results = await postToPlatforms({
       videoId,
       strategy,

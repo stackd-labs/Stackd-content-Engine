@@ -78,6 +78,12 @@ export const DEFAULT_TRIGGER_WORDS = [
 
 export const DEFAULT_VIRALITY_THRESHOLD = 6;
 
+// Platforms with a real OAuth "Connect" flow wired up (app credentials
+// already registered — see pipeline/src/lib/oauth/*.js). The rest have
+// working uploaders but no OAuth app yet, so the Settings page shows a
+// "Requires app setup" state for them instead of a working Connect button.
+export const OAUTH_CONNECTABLE_PLATFORMS: Platform[] = ['youtube', 'tiktok', 'twitter'];
+
 export const PLATFORM_LABELS: Record<Platform, string> = {
   youtube: 'YouTube',
   tiktok: 'TikTok',

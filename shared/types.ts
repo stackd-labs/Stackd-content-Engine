@@ -75,6 +75,10 @@ export interface Video {
   hook_style: string | null;
   content_pillar: string | null;
   run_log: RunLogEntry[];
+  // Snapshot of { strategy, files, thumbnails, platforms } captured when
+  // viralityCheck flags this video; consumed by approveAndPost. Cleared
+  // once posting resumes.
+  pending_post_payload?: Record<string, unknown> | null;
 }
 
 export interface Post {

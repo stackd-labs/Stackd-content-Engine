@@ -36,6 +36,14 @@ export async function dbUpdate(table, id, patch) {
   return data;
 }
 
+/** Insert or update on conflict (e.g. a unique key other than id). */
+export async function dbUpsert(table, row, { onConflict } = {}) {
+  if (!supabase) return { id: row.id ?? cryptoId(), ...row };
+  const { data, error } = await supabase.from(table).upsert(row, { onConflict }).select().single();
+  if (error) { log.error(`upsert ${table}: ${error.message}`); return null; }
+  return data;
+}
+
 /** Select rows with optional eq filters / ordering / limit. */
 export async function dbSelect(table, { match = {}, order, ascending = false, limit } = {}) {
   if (!supabase) return [];

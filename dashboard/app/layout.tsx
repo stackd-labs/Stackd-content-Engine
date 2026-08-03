@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import { AppGate } from '@/components/AppGate';
 import { Sidebar } from '@/components/Sidebar';
 import { RunPipelineButton } from '@/components/RunPipelineButton';
 
@@ -20,9 +21,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <Sidebar />
-        <main className="ml-60 min-h-screen p-6 lg:p-8">{children}</main>
-        <RunPipelineButton />
+        <AppGate>
+          <Sidebar />
+          <main className="ml-60 min-h-screen p-6 lg:p-8">{children}</main>
+          <RunPipelineButton />
+        </AppGate>
       </body>
     </html>
   );

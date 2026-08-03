@@ -5,6 +5,7 @@ import { Rocket, Check, Loader2, CircleDashed, PlayCircle } from 'lucide-react';
 import { Modal } from './ui/SlideOver';
 import { ProgressBar } from './ui/primitives';
 import { PlatformIcon } from './ui/PlatformIcon';
+import { authFetch } from '@/lib/authFetch';
 import {
   PIPELINE_STAGES, PIPELINE_STAGE_LABELS, PLATFORMS,
   DEFAULT_CONTENT_PILLARS, FORMATS,
@@ -41,7 +42,7 @@ export function RunPipelineButton() {
     setStageIdx(0);
 
     // Kick off the real pipeline (tolerant: demo mode has no runner).
-    fetch('/api/run-pipeline', {
+    authFetch('/api/run-pipeline', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ topic, format, pillar, platforms, autoPost }),

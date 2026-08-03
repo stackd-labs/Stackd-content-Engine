@@ -93,6 +93,48 @@ function RunLogStepper({ log }: { log: RunLogEntry[] }) {
   );
 }
 
+// ── Approve & Post button (flagged videos only) ───────────────────────────────
+function ApproveButton({ videoId }: { videoId: string }) {
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleApprove() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/approve-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ videoId }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Approve failed');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={handleApprove}
+        disabled={submitting}
+        className="btn btn-gold flex items-center gap-1.5 text-sm disabled:opacity-50"
+      >
+        {submitting ? (
+          <Loader2 size={14} className="animate-spin" />
+        ) : (
+          <Check size={14} />
+        )}
+        {submitting ? 'Posting…' : 'Approve & Post'}
+      </button>
+      {error && <span className="text-xs text-rose-400">{error}</span>}
+    </div>
+  );
+}
+
 // ── Slide-over content ────────────────────────────────────────────────────────
 function VideoDetailPanel({
   video,
@@ -120,6 +162,11 @@ function VideoDetailPanel({
           <span className="pill bg-white/8 text-white/55 border border-white/10">
             {duration(video.duration_seconds)}
           </span>
+        )}
+        {video.status === 'flagged' && (
+          <div className="ml-auto">
+            <ApproveButton videoId={video.id} />
+          </div>
         )}
       </div>
 
@@ -275,6 +322,11 @@ export default function VideosPage() {
 
   // Selected video for SlideOver
   const [selected, setSelected] = useState<Video | null>(null);
+
+  // Keep the SlideOver in sync with realtime updates (e.g. flagged -> posting -> live).
+  const selectedSync = selected
+    ? (videos.find((v) => v.id === selected.id) ?? selected)
+    : null;
 
   // Derived platform list per video
   const platformsByVideo = useMemo(() => {
@@ -459,19 +511,19 @@ export default function VideosPage() {
 
       {/* SlideOver */}
       <SlideOver
-        open={selected != null}
+        open={selectedSync != null}
         onClose={() => setSelected(null)}
-        title={selected?.title ?? ''}
+        title={selectedSync?.title ?? ''}
         subtitle={
-          selected
-            ? `${selected.content_pillar ?? ''} · ${selected.format} · ${selected.status}`
+          selectedSync
+            ? `${selectedSync.content_pillar ?? ''} · ${selectedSync.format} · ${selectedSync.status}`
             : undefined
         }
         width="max-w-3xl"
       >
-        {selected && (
+        {selectedSync && (
           <VideoDetailPanel
-            video={selected}
+            video={selectedSync}
             posts={posts}
             analytics={analytics}
           />

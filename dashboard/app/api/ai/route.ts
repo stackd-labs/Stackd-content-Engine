@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { requireUser } from '@/lib/requireUser';
 
 // Lightweight AI helper used by the dashboard for three jobs:
 //   action=calendar_plan  -> a 30-day content plan
@@ -14,6 +15,11 @@ import {
 } from '@shared/constants';
 
 export async function POST(req: Request) {
+  const auth = await requireUser(req);
+  if (!auth.ok) {
+    return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
+  }
+
   const { action, context } = await req.json().catch(() => ({ action: '', context: {} }));
   const key = process.env.ANTHROPIC_API_KEY;
 

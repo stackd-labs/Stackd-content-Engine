@@ -7,7 +7,8 @@ import {
   MessageSquare, Mail, BarChart3, Settings,
 } from 'lucide-react';
 import { Logo } from './Logo';
-import { isSupabaseConfigured } from '@/lib/supabase';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { useSupabaseSession } from '@/lib/useSupabaseSession';
 
 const NAV = [
   { href: '/', label: 'Overview', Icon: LayoutDashboard },
@@ -23,6 +24,7 @@ const NAV = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { email } = useSupabaseSession();
   return (
     <aside className="fixed inset-y-0 left-0 z-30 flex w-60 flex-col border-r border-border bg-surface">
       <div className="px-5 py-5">
@@ -49,7 +51,7 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-border px-5 py-4">
+      <div className="space-y-3 border-t border-border px-5 py-4">
         <div className="flex items-center gap-2 text-xs">
           <span
             className={`h-2 w-2 rounded-full ${isSupabaseConfigured ? 'bg-emerald-400' : 'bg-amber-400'}`}
@@ -58,6 +60,19 @@ export function Sidebar() {
             {isSupabaseConfigured ? 'Live · Supabase connected' : 'Demo · placeholder data'}
           </span>
         </div>
+        {isSupabaseConfigured && email && (
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-xs text-white/40" title={email}>
+              {email}
+            </span>
+            <button
+              onClick={() => supabase?.auth.signOut()}
+              className="shrink-0 text-xs font-medium text-white/50 hover:text-gold"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

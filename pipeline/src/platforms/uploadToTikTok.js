@@ -1,8 +1,10 @@
 // ============================================================
 // Platform uploader — TikTok
 // Uses the TikTok Content Posting API v2 (Direct Post flow).
-// Required env: TIKTOK_ACCESS_TOKEN.
-// Falls back to mock when credentials are absent.
+// Credentials come from the dashboard's Connect flow (platform_credentials
+// table) if connected, else fall back to TIKTOK_ACCESS_TOKEN in .env —
+// see pipeline/src/lib/credentials.js.
+// Falls back to mock when no credential is available either way.
 // Video is posted as DRAFT → status 'scheduled'.
 // Trending sound: attach TIKTOK_TRENDING_SOUND_ID if provided.
 // ============================================================
@@ -11,7 +13,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fetchJSON } from '../lib/http.js';
 import { dbInsert, cryptoId } from '../lib/supabase.js';
-import { env, has } from '../lib/env.js';
+import { env } from '../lib/env.js';
+import { getPlatformCredential } from '../lib/credentials.js';
 import { log } from '../lib/logger.js';
 import { PLATFORM_ORIENTATION } from '../lib/constants.js';
 
@@ -31,9 +34,11 @@ export async function uploadToTikTok({ videoId, strategy, files, thumbnails }) {
   let platformPostId;
   let platformUrl;
 
-  if (has('TIKTOK_ACCESS_TOKEN')) {
+  const cred = await getPlatformCredential(PLATFORM);
+
+  if (cred?.accessToken) {
     try {
-      const accessToken = env.TIKTOK_ACCESS_TOKEN;
+      const accessToken = cred.accessToken;
 
       // Step 1: Query creator info to confirm account is eligible to post.
       // POST https://open.tiktokapis.com/v2/post/publish/creator_info/query/

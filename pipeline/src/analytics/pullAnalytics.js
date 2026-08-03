@@ -1,8 +1,12 @@
 // ============================================================
 // Stage 12 — pullAnalytics.js
 // Runs every 24 h via cron. Pulls performance metrics for every
-// posted video, stores rows in `analytics`, then asks Claude for
-// a weekly insight saved to output/logs/weekly-insight-<date>.json.
+// posted video — real metrics from the YouTube Analytics API,
+// TikTok's video/query endpoint, and Meta's Insights API for
+// whichever of those platforms have live posting creds configured
+// (demo numbers otherwise), stores rows in `analytics`, then asks
+// Claude for a weekly insight + calendar suggestions saved to
+// output/logs/weekly-insight-<date>.json.
 // ============================================================
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,6 +14,9 @@ import { generateJSON } from '../lib/ai.js';
 import { dbInsert, dbSelect } from '../lib/supabase.js';
 import { getSettings } from '../lib/settings.js';
 import { logsDir, rel } from '../lib/paths.js';
+import { env, has, DEMO } from '../lib/env.js';
+import { fetchJSON } from '../lib/http.js';
+import { getPlatformCredential } from '../lib/credentials.js';
 import { log } from '../lib/logger.js';
 import { PLATFORMS, HOOK_STYLES } from '../lib/constants.js';
 
@@ -39,12 +46,200 @@ function demoMetrics(post) {
 }
 
 // ---------------------------------------------------------------------------
-// Platform API shim — swap in real SDK calls per platform when creds exist.
+// Real per-platform metric fetchers. Each reuses the exact same env creds
+// already configured for posting (see platforms/uploadTo*.js) — no new
+// credentials are introduced here, though some platforms need a BROADER
+// SCOPE on those same tokens than posting alone requires. Flagged inline
+// below, and every fetcher fails soft (caught by fetchPostMetrics, which
+// falls back to demoMetrics) rather than aborting the whole run.
 // ---------------------------------------------------------------------------
+
+// --- YouTube Analytics API ---------------------------------------------------
+// FLAG: requires the yt-analytics.readonly OAuth scope. The Connect flow
+// (pipeline/src/lib/oauth/youtube.js) requests it up front; a token minted
+// before that flow existed (uploadToYouTube.js only ever needed
+// youtube.upload) will 403 here until reconnected.
+async function fetchYouTubeMetrics(post, accessToken) {
+  const params = new URLSearchParams({
+    ids: 'channel==MINE',
+    startDate: '2005-01-01', // lifetime-to-date; the analytics row is a per-video snapshot, not a period delta
+    endDate: new Date().toISOString().slice(0, 10),
+    metrics: 'views,likes,comments,shares,estimatedMinutesWatched,subscribersGained',
+    dimensions: 'video',
+    filters: `video==${post.platform_post_id}`,
+  });
+  const res = await fetchJSON(`https://youtubeanalytics.googleapis.com/v2/reports?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const row = res.rows?.[0];
+  if (!row) throw new Error('no analytics rows returned for this video (too new, or scope missing)');
+  const [, views, likes, comments, shares, minutesWatched, subsGained] = row;
+  return {
+    views: views ?? 0,
+    likes: likes ?? 0,
+    comments: comments ?? 0,
+    shares: shares ?? 0,
+    watch_time_seconds: Math.round((minutesWatched ?? 0) * 60),
+    click_throughs: 0, // YouTube Analytics has no simple per-video CTR metric in this report shape
+    followers_gained: subsGained ?? 0,
+  };
+}
+
+// --- TikTok metrics endpoint --------------------------------------------------
+// FLAG: requires the video.list OAuth scope. The Connect flow
+// (pipeline/src/lib/oauth/tiktok.js) requests it up front; a token minted
+// before that flow existed (uploadToTikTok.js only ever needed
+// video.upload/video.publish) will 403 here until reconnected. Also:
+// uploadToTikTok.js posts with privacy_level SELF_ONLY (draft) — until the
+// creator manually publishes from the TikTok app, there is no public
+// video_id to query, and publish/status/fetch will report it as pending.
+async function resolveTikTokVideoId(publishId, accessToken) {
+  const res = await fetchJSON('https://open.tiktokapis.com/v2/post/publish/status/fetch/', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+    },
+    body: JSON.stringify({ publish_id: publishId }),
+  });
+  const videoId = res?.data?.publicly_available_post_id?.[0] ?? res?.data?.video_id ?? null;
+  if (!videoId) {
+    throw new Error('TikTok has no resolvable video id yet (draft not published, or publish still processing)');
+  }
+  return videoId;
+}
+
+async function fetchTikTokMetrics(post, accessToken) {
+  const videoId = await resolveTikTokVideoId(post.platform_post_id, accessToken);
+  const res = await fetchJSON(
+    'https://open.tiktokapis.com/v2/video/query/?fields=id,like_count,comment_count,share_count,view_count',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+      },
+      body: JSON.stringify({ filters: { video_ids: [videoId] } }),
+    },
+  );
+  const video = res?.data?.videos?.[0];
+  if (!video) throw new Error('TikTok video/query returned no data for this video id');
+  return {
+    views: video.view_count ?? 0,
+    likes: video.like_count ?? 0,
+    comments: video.comment_count ?? 0,
+    shares: video.share_count ?? 0,
+    watch_time_seconds: 0, // not exposed by this endpoint's public field set
+    click_throughs: 0,
+    followers_gained: 0,
+  };
+}
+
+// --- Meta Insights API (Instagram + Facebook) ---------------------------------
+// FLAG: both need read_insights / instagram_manage_insights permission on the
+// SAME tokens used for posting (instagram_content_publish / pages_manage_posts
+// alone are not sufficient) — re-authorize with insights read access added if
+// this 403s. Also requires an Instagram Business/Creator account linked to a
+// Facebook Page; a personal IG account has no Insights API access at all.
+async function fetchInstagramMetrics(post) {
+  const insightMetrics = ['impressions', 'reach', 'saved', 'shares', 'plays'];
+  const [insightsRes, nodeRes] = await Promise.all([
+    fetchJSON(
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(post.platform_post_id)}/insights` +
+      `?metric=${insightMetrics.join(',')}&access_token=${env.INSTAGRAM_ACCESS_TOKEN}`,
+    ),
+    fetchJSON(
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(post.platform_post_id)}` +
+      `?fields=like_count,comments_count&access_token=${env.INSTAGRAM_ACCESS_TOKEN}`,
+    ),
+  ]);
+  const byName = Object.fromEntries((insightsRes.data || []).map((m) => [m.name, m.values?.[0]?.value ?? 0]));
+  return {
+    views: byName.plays ?? byName.impressions ?? 0,
+    likes: nodeRes.like_count ?? 0,
+    comments: nodeRes.comments_count ?? 0,
+    shares: byName.shares ?? 0,
+    watch_time_seconds: 0, // Instagram doesn't expose average watch time as a simple per-media metric
+    click_throughs: 0,
+    followers_gained: 0, // follower growth is account-level, not attributable to a single post here
+  };
+}
+
+async function fetchFacebookMetrics(post) {
+  const insightMetrics = ['post_impressions', 'post_video_views', 'post_reactions_by_type_total'];
+  const [insightsRes, nodeRes] = await Promise.all([
+    fetchJSON(
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(post.platform_post_id)}/insights` +
+      `?metric=${insightMetrics.join(',')}&access_token=${env.FACEBOOK_PAGE_ACCESS_TOKEN}`,
+    ),
+    fetchJSON(
+      `https://graph.facebook.com/v19.0/${encodeURIComponent(post.platform_post_id)}` +
+      `?fields=shares,comments.summary(true)&access_token=${env.FACEBOOK_PAGE_ACCESS_TOKEN}`,
+    ),
+  ]);
+  const byName = Object.fromEntries((insightsRes.data || []).map((m) => [m.name, m.values?.[0]?.value]));
+  const reactions = byName.post_reactions_by_type_total || {};
+  const likes = Object.values(reactions).reduce((sum, n) => sum + (Number(n) || 0), 0);
+  return {
+    views: byName.post_video_views ?? byName.post_impressions ?? 0,
+    likes,
+    comments: nodeRes.comments?.summary?.total_count ?? 0,
+    shares: nodeRes.shares?.count ?? 0,
+    watch_time_seconds: 0,
+    click_throughs: 0,
+    followers_gained: 0,
+  };
+}
+
+// youtube/tiktok resolve their access token via getPlatformCredential (DB
+// Connect row, else env fallback — see pipeline/src/lib/credentials.js) since
+// both have a real OAuth Connect flow now. instagram/facebook don't yet, so
+// they keep reading straight from env. LinkedIn and Twitter analytics weren't
+// part of this request — they keep returning demoMetrics (same as an
+// unconfigured platform) until that's asked for.
+const METRIC_FETCHERS = {
+  youtube:   { needsCredential: true, fetch: fetchYouTubeMetrics },
+  tiktok:    { needsCredential: true, fetch: fetchTikTokMetrics },
+  instagram: { ready: () => has('INSTAGRAM_ACCESS_TOKEN') && !DEMO, fetch: fetchInstagramMetrics },
+  facebook:  { ready: () => has('FACEBOOK_PAGE_ACCESS_TOKEN') && !DEMO, fetch: fetchFacebookMetrics },
+};
+
 async function fetchPostMetrics(post) {
   const platform = post.platform || 'youtube';
-  // Real integrations would branch here on platform + check env creds.
-  // For now, all platforms fall through to demo metrics.
+  const entry = METRIC_FETCHERS[platform];
+
+  if (!entry || !post.platform_post_id) {
+    log.mock(`${platform} analytics API (post ${post.id ?? 'demo'})`);
+    return demoMetrics(post);
+  }
+
+  if (entry.needsCredential) {
+    const cred = DEMO ? null : await getPlatformCredential(platform);
+    if (!cred?.accessToken) {
+      log.mock(`${platform} analytics API (post ${post.id ?? 'demo'})`);
+      return demoMetrics(post);
+    }
+    try {
+      const metrics = await entry.fetch(post, cred.accessToken);
+      log.ok(`${platform} analytics: live metrics fetched for post ${post.id}`);
+      return metrics;
+    } catch (err) {
+      log.error(`${platform} analytics API failed for post ${post.id} — falling back to demo metrics: ${err.message}`);
+      return demoMetrics(post);
+    }
+  }
+
+  if (entry.ready?.()) {
+    try {
+      const metrics = await entry.fetch(post);
+      log.ok(`${platform} analytics: live metrics fetched for post ${post.id}`);
+      return metrics;
+    } catch (err) {
+      log.error(`${platform} analytics API failed for post ${post.id} — falling back to demo metrics: ${err.message}`);
+      return demoMetrics(post);
+    }
+  }
+
   log.mock(`${platform} analytics API (post ${post.id ?? 'demo'})`);
   return demoMetrics(post);
 }

@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Check, X, Plus, Trash2, Bell, KeyRound, Palette, Mic2, Tag,
-  Hash, Target, ChevronDown,
+  Hash, Target, ChevronDown, Link2, Loader2, AlertCircle,
 } from 'lucide-react';
 import { PageHeader, SectionCard } from '@/components/ui/primitives';
 import { Badge } from '@/components/ui/Badge';
@@ -12,6 +12,7 @@ import { isSupabaseConfigured } from '@/lib/supabase';
 import {
   PLATFORMS,
   PLATFORM_LABELS,
+  OAUTH_CONNECTABLE_PLATFORMS,
   DEFAULT_CONTENT_PILLARS,
   DEFAULT_HOOK_STYLES,
   DEFAULT_TRIGGER_WORDS,
@@ -163,6 +164,145 @@ function ConnectionRow({
 }
 
 // ---------------------------------------------------------------------------
+// Connected Accounts (OAuth) — real per-platform Connect/Disconnect,
+// replacing manual token-pasting into pipeline/.env. Status comes from
+// platform_credentials via /api/oauth/status; Connect is a real top-level
+// navigation (not a fetch) since it has to trigger the provider redirect.
+// ---------------------------------------------------------------------------
+type OAuthStatusMap = Record<Platform, { connected: boolean; accountLabel?: string | null }>;
+
+function ConnectedAccountsSection() {
+  const [status, setStatus] = useState<OAuthStatusMap | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [disconnecting, setDisconnecting] = useState<Platform | null>(null);
+  const [banner, setBanner] = useState<{ kind: 'connected' | 'error'; message: string } | null>(null);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/oauth/status');
+      const data = await res.json();
+      setStatus(data.platforms ?? null);
+    } catch {
+      setStatus(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchStatus();
+
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    const error = params.get('error');
+    if (connected) {
+      setBanner({ kind: 'connected', message: `Connected ${PLATFORM_LABELS[connected as Platform] ?? connected}.` });
+    } else if (error) {
+      setBanner({ kind: 'error', message: error });
+    }
+  }, [fetchStatus]);
+
+  async function handleDisconnect(platform: Platform) {
+    setDisconnecting(platform);
+    try {
+      await fetch(`/api/oauth/${platform}/disconnect`, { method: 'POST' });
+      await fetchStatus();
+    } finally {
+      setDisconnecting(null);
+    }
+  }
+
+  return (
+    <SectionCard className="mb-6">
+      <div className="mb-4 flex items-center gap-2">
+        <Link2 size={16} className="text-gold/70" />
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-white/60">Connected Accounts</h2>
+      </div>
+      <Desc>
+        Connect each platform&apos;s real account instead of pasting a token into pipeline/.env.
+        Tokens are stored server-side only and never sent to the browser.
+      </Desc>
+
+      {banner && (
+        <div
+          className={[
+            'mb-4 flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm',
+            banner.kind === 'connected'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+              : 'border-rose-500/30 bg-rose-500/10 text-rose-300',
+          ].join(' ')}
+        >
+          {banner.kind === 'connected' ? <Check size={14} /> : <AlertCircle size={14} />}
+          {banner.message}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {PLATFORMS.map((p) => {
+          const isConnectable = (OAUTH_CONNECTABLE_PLATFORMS as string[]).includes(p);
+          const info = status?.[p];
+
+          if (!isConnectable) {
+            return (
+              <div
+                key={p}
+                className="flex items-center justify-between rounded-lg border border-border/30 bg-bg px-4 py-3 opacity-60"
+              >
+                <div className="flex items-center gap-3">
+                  <PlatformIcon platform={p} size={18} />
+                  <div>
+                    <div className="text-sm text-white/70">{PLATFORM_LABELS[p]}</div>
+                    <div className="text-xs text-white/35">
+                      Requires app setup — add {p === 'linkedin' ? 'LinkedIn' : 'Facebook'} app credentials to pipeline/.env first
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <div
+              key={p}
+              className="flex items-center justify-between rounded-lg border border-border/60 bg-bg px-4 py-3"
+            >
+              <div className="flex items-center gap-3">
+                <PlatformIcon platform={p} size={18} />
+                <div>
+                  <div className="text-sm text-white/80">{PLATFORM_LABELS[p]}</div>
+                  <div className="text-xs text-white/35">
+                    {loading ? 'Checking…' : info?.connected ? (info.accountLabel || 'Connected') : 'Not connected'}
+                  </div>
+                </div>
+              </div>
+              {info?.connected ? (
+                <button
+                  type="button"
+                  onClick={() => handleDisconnect(p)}
+                  disabled={disconnecting === p}
+                  className="btn btn-ghost flex items-center gap-1.5 text-xs disabled:opacity-50"
+                >
+                  {disconnecting === p && <Loader2 size={12} className="animate-spin" />}
+                  Disconnect
+                </button>
+              ) : (
+                <a
+                  href={`/api/oauth/${p}/start`}
+                  className="btn btn-gold flex items-center gap-1.5 text-xs"
+                >
+                  <Link2 size={12} />
+                  Connect
+                </a>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </SectionCard>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 export default function SettingsPage() {
@@ -273,6 +413,11 @@ export default function SettingsPage() {
           ))}
         </div>
       </SectionCard>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Connected Accounts (OAuth)                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <ConnectedAccountsSection />
 
       {/* ------------------------------------------------------------------ */}
       {/* 2. Auto-Post per Platform                                           */}

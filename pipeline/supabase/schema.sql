@@ -72,11 +72,16 @@ create table if not exists videos (
   run_log jsonb default '[]'::jsonb,
   -- Stage 9 repurposing output (blog/thread/linkedin/newsletter/clips/quote cards),
   -- surfaced in the dashboard Video detail panel.
-  repurposed jsonb default '{}'::jsonb
+  repurposed jsonb default '{}'::jsonb,
+  -- Snapshot of { strategy, files, thumbnails, platforms } captured when
+  -- viralityCheck flags a video, so the dashboard's "Approve & Post" button
+  -- can re-enter postToPlatforms without re-running the earlier stages.
+  pending_post_payload jsonb
 );
 
 -- Idempotent add for projects created before the repurposed column existed.
 alter table videos add column if not exists repurposed jsonb default '{}'::jsonb;
+alter table videos add column if not exists pending_post_payload jsonb;
 
 create table if not exists posts (
   id uuid primary key default gen_random_uuid(),
@@ -169,6 +174,25 @@ create table if not exists pipeline_runs (
   output_log jsonb default '[]'::jsonb
 );
 
+-- OAuth-connected platform credentials, replacing manually-pasted tokens in
+-- pipeline/.env. `tenant_id` is a constant 'default' for now (this app is
+-- single-tenant) — it exists purely so a future multi-tenant migration only
+-- has to start passing a real tenant id through, not alter this schema.
+create table if not exists platform_credentials (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id text not null default 'default',
+  platform platform not null,
+  access_token text not null,
+  refresh_token text,      -- oauth2 only (youtube, tiktok); null for twitter
+  token_secret text,       -- oauth1 only (twitter's paired secret); null for youtube/tiktok
+  expires_at timestamptz,  -- oauth2 only; null for twitter (user tokens don't expire)
+  scopes text[] default '{}',
+  account_label text,
+  connected_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (tenant_id, platform)
+);
+
 -- Indexes ------------------------------------------------------
 create index if not exists idx_posts_video on posts(video_id);
 create index if not exists idx_analytics_post on analytics(post_id);
@@ -206,9 +230,45 @@ do $$ begin
   alter publication supabase_realtime add table content_calendar;
 exception when duplicate_object then null; end $$;
 
--- ============================================================
--- NOTE: This dashboard is an internal command center. Row Level
--- Security is intentionally left for you to configure based on
--- your auth model. For a single-tenant internal tool behind auth,
--- enable RLS and add policies before exposing publicly.
--- ============================================================
+-- Row Level Security --------------------------------------------
+-- This section documents, rather than changes, the live security
+-- posture: RLS is already enabled on every table in the Supabase
+-- dashboard, default-deny with no permissive policies (verified
+-- directly against the live project — anon key gets 401 on every
+-- insert, and cannot read rows back even when they exist). These
+-- statements just bring that config under version control.
+--
+-- Enabling RLS with zero permissive policies denies all access to
+-- non-owner roles (anon/authenticated included) by default; the
+-- explicit `as restrictive ... using (false)` policy below just
+-- makes that deny-all intent visible in the schema itself, and
+-- guards against someone later adding a permissive policy without
+-- also scoping it. Only the service role (which bypasses RLS)
+-- can read or write these tables.
+
+alter table videos enable row level security;
+create policy "deny_all" on videos as restrictive for all using (false) with check (false);
+
+alter table posts enable row level security;
+create policy "deny_all" on posts as restrictive for all using (false) with check (false);
+
+alter table analytics enable row level security;
+create policy "deny_all" on analytics as restrictive for all using (false) with check (false);
+
+alter table leads enable row level security;
+create policy "deny_all" on leads as restrictive for all using (false) with check (false);
+
+alter table comments enable row level security;
+create policy "deny_all" on comments as restrictive for all using (false) with check (false);
+
+alter table emails enable row level security;
+create policy "deny_all" on emails as restrictive for all using (false) with check (false);
+
+alter table content_calendar enable row level security;
+create policy "deny_all" on content_calendar as restrictive for all using (false) with check (false);
+
+alter table pipeline_runs enable row level security;
+create policy "deny_all" on pipeline_runs as restrictive for all using (false) with check (false);
+
+alter table platform_credentials enable row level security;
+create policy "deny_all" on platform_credentials as restrictive for all using (false) with check (false);

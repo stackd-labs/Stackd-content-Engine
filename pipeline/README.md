@@ -38,11 +38,13 @@ Supabase so the [dashboard](../dashboard) updates in real time.
 pipeline/
 ├─ src/
 │  ├─ index.js              # orchestrator (runPipeline)
-│  ├─ server.js             # HTTP trigger: POST /run, POST /lead, GET /health
+│  ├─ server.js             # HTTP trigger: POST /run, POST /lead, POST /approve/:videoId,
+│  │                        #   GET /oauth/:platform/authorize-url, POST /oauth/:platform/exchange, GET /health
 │  ├─ cron.js               # node-cron schedules (comments/email/analytics/newsletter)
 │  ├─ lib/                  # shared clients & helpers (frozen API used by every stage)
 │  │   ├─ ai.js  elevenlabs.js  pexels.js  openai.js  resend.js
-│  │   ├─ supabase.js  runState.js  settings.js  notify.js
+│  │   ├─ supabase.js  runState.js  settings.js  notify.js  credentials.js
+│  │   ├─ oauth/            # youtube.js, tiktok.js, twitter.js — Connect flow providers
 │  │   ├─ youtube.js  search.js  mediaLibrary.js
 │  │   └─ paths.js  http.js  logger.js  env.js  constants.js
 │  ├─ stages/               # stages 2–7, 9
@@ -119,9 +121,51 @@ PIPELINE_DEMO=true node src/index.js "Any topic"
 ```bash
 npm run server         # listens on PORT (default 4040)
 ```
-Then set `PIPELINE_WEBHOOK_URL=http://localhost:4040/run` in `dashboard/.env.local`.
+Then set `PIPELINE_WEBHOOK_URL=http://localhost:4040/run` and `APP_URL=http://localhost:3030`
+in `dashboard/.env.local`.
 Endpoints: `POST /run` (body `{topic,format,pillar,platforms,autoPost}`),
-`POST /lead` (lead-magnet capture), `GET /health`.
+`POST /lead` (lead-magnet capture),
+`POST /approve/:videoId` (resume posting for a flagged video — dashboard's
+Approve & Post button),
+`GET /oauth/:platform/authorize-url` + `POST /oauth/:platform/exchange`
+(the OAuth Connect flow behind Settings → Connected Accounts — youtube,
+tiktok, and twitter only; see below), `GET /health`.
+
+### Connect a platform account (replaces pasting a token into .env)
+Settings → Connected Accounts → **Connect** runs the real OAuth flow for
+**YouTube, TikTok, and Twitter** (the 3 platforms with an app already
+registered — client id/secret already in this `.env`) and stores the
+resulting token in Supabase's `platform_credentials` table instead of a
+`.env` var. Every uploader/fetcher checks that table first and falls back
+to the legacy `.env` vars if nothing's connected yet, so nothing breaks if
+you skip this. Instagram, Facebook, and LinkedIn show "Requires app setup"
+in the UI — they only have a manually-pasted token today, no OAuth app to
+redirect against yet.
+
+Each provider's app console needs `{APP_URL}/api/oauth/{platform}/callback`
+added as an authorized redirect URI (e.g.
+`http://localhost:3030/api/oauth/youtube/callback` for local dev).
+
+### Security
+
+This server has no auth in front of it by default (fine for localhost-only dev) — before
+it's reachable from anywhere else:
+
+- **`POST /run`** — set `PIPELINE_SHARED_SECRET` in this `.env` *and* the dashboard's
+  `dashboard/.env.local`. Once set, `/run` requires `Authorization: Bearer
+  <PIPELINE_SHARED_SECRET>`; the dashboard's `/api/run-pipeline` route sends it
+  automatically. Left unset, `/run` stays open and a warning is logged on startup.
+- **`POST /lead`** — this one stays intentionally unauthenticated (it's called directly
+  by anonymous visitors' browsers from the public lead-magnet landing page, so it can't
+  require a login). It's instead restricted to requests whose `Origin` matches
+  `LEAD_CAPTURE_ALLOWED_ORIGIN` (default `https://stackdstudiosai.com`) and rate-limited
+  to 5 requests / 10 min per IP. This blocks casual scanning/spam, not a determined
+  direct API caller forging an `Origin` header.
+- **`POST /approve/:videoId`** and the `/oauth/*` endpoints are *not* covered by either
+  mechanism above — they're only ever called server-side (dashboard → pipeline), never
+  directly by a browser, but they're still open to anyone who finds this server's URL.
+  If you deploy this server somewhere with a public hostname, put it behind a private
+  network / VPN / firewall allowlist rather than relying on endpoint-level checks alone.
 
 ### Run individual stages / jobs
 ```bash
@@ -223,6 +267,8 @@ against each shot's b-roll query **before** hitting Pexels, so your own footage 
 | Dashboard not updating live | Confirm `schema.sql` ran (Realtime publication) and the dashboard has the anon key. |
 | `Module not found` | Run `npm install` in `pipeline/`; relative imports must keep their `.js` extension (ESM). |
 | Claude returns mock despite a key | Check the key and `ANTHROPIC_MODEL`; parse failures fall back to mock and log a warning. |
+| "Connect" redirects to `/settings?error=...` | The error message is the actual provider/pipeline response — common causes: `PIPELINE_WEBHOOK_URL`/`APP_URL` not set, the platform's redirect URI not registered in its app console, or (Twitter) `TWITTER_API_KEY`/`SECRET` invalid. |
+| Analytics/DM works after Connect but not before (or vice versa) | Expected — `getPlatformCredential` prefers the Supabase `platform_credentials` row over `.env`; disconnect to fall back to `.env` again. |
 
 ---
 
@@ -235,12 +281,27 @@ Dashboard "Run Pipeline"  ──POST /run──▶  server.js ──▶ runPipel
         │ writes videos row + run_log at each stage
         ▼
    viralityCheck ──(below threshold / auto-post off)──▶ flag + notify + PAUSE
-        │ (approved)
+        │ saves pending_post_payload {strategy,files,thumbnails,platforms}
+        │                                                        │
+        │ (approved)                        Dashboard "Approve & Post"
+        │                                    ──POST /approve/:videoId──▶ approveAndPost()
+        ▼                                                        │
+   postToPlatforms (parallel) ◀─────────────────────────────────┘
+        │
         ▼
-   postToPlatforms (parallel) ─▶ posts rows ─▶ repurpose ─▶ runCommentMonitor
+   posts rows ─▶ repurpose ─▶ runCommentMonitor
                                                                    │
    cron: comments (hourly) · email + analytics (daily) · newsletter (Sun)
         └─ comments ─▶ comments table   leads ─▶ leads table   analytics ─▶ analytics table
+
+Dashboard "Connect [Platform]" (Settings) ──GET /oauth/:platform/authorize-url──▶ server.js
+        │ 302 to provider consent screen, user approves
+        ▼
+Dashboard "…/callback" ──POST /oauth/:platform/exchange──▶ server.js ──▶ savePlatformCredential()
+        │                                                                  writes platform_credentials
+        ▼
+Every uploadTo*.js / analytics fetcher / DM sender ──▶ getPlatformCredential()
+        reads platform_credentials first, falls back to .env if nothing's connected yet
 ```
 
 All of which surfaces in the dashboard's Overview, Videos, Posts, Leads, Comments,

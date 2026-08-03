@@ -3,6 +3,7 @@
 import { useState, useMemo } from 'react';
 import { Mail, Search, Sparkles, Send, Loader2, Check } from 'lucide-react';
 import { useTable } from '@/lib/useTable';
+import { authFetch } from '@/lib/authFetch';
 import {
   PageHeader,
   StatCard,
@@ -110,7 +111,7 @@ export default function EmailListPage() {
   async function handleGenerate() {
     setGenerating(true);
     try {
-      const res = await fetch('/api/ai', {
+      const res = await authFetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'newsletter' }),

@@ -13,6 +13,7 @@ import { uploadToFacebook } from './uploadToFacebook.js';
 import { uploadToTwitter } from './uploadToTwitter.js';
 import { getSettings } from '../lib/settings.js';
 import { setVideoStatus, updateVideo, appendVideoLog } from '../lib/runState.js';
+import { dbSelect } from '../lib/supabase.js';
 import { log } from '../lib/logger.js';
 
 const UPLOADER_MAP = {
@@ -85,6 +86,45 @@ export async function postToPlatforms({ videoId, strategy, files, thumbnails, pl
   catch (err) { log.warn(`postToPlatforms appendVideoLog failed — ${err.message}`); }
 
   log.ok(`postToPlatforms done — ${logMsg}`);
+  return results;
+}
+
+/**
+ * Approve & Post — picks up a video where viralityCheck's "flagged" status
+ * left off, using the { strategy, files, thumbnails, platforms } snapshot
+ * saved to videos.pending_post_payload at flag time, and re-enters
+ * postToPlatforms for it. Called by the dashboard's Approve & Post button
+ * via POST /approve/:videoId.
+ *
+ * @param {string} videoId
+ * @returns {Promise<Array<{ platform: string, ok: boolean, post?: object, error?: string }>>}
+ */
+export async function approveAndPost(videoId) {
+  const [video] = await dbSelect('videos', { match: { id: videoId } });
+  if (!video) throw new Error(`approveAndPost: video ${videoId} not found`);
+  if (video.status !== 'flagged') {
+    throw new Error(`approveAndPost: video ${videoId} is not flagged (status: ${video.status})`);
+  }
+
+  const payload = video.pending_post_payload;
+  if (!payload) {
+    throw new Error(`approveAndPost: no pending_post_payload for video ${videoId} — cannot resume posting`);
+  }
+
+  log.info(`approveAndPost: resuming post for video ${videoId}`);
+  await setVideoStatus(videoId, 'posting');
+
+  const results = await postToPlatforms({
+    videoId,
+    strategy: payload.strategy,
+    files: payload.files,
+    thumbnails: payload.thumbnails,
+    platforms: payload.platforms,
+  });
+
+  try { await updateVideo(videoId, { pending_post_payload: null }); }
+  catch (err) { log.warn(`approveAndPost: could not clear pending_post_payload — ${err.message}`); }
+
   return results;
 }
 

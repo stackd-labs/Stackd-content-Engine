@@ -2,9 +2,12 @@
 // Platform uploader — X / Twitter
 // Uses the Twitter API v2 media upload (v1.1 chunked) + tweet
 // create flow with OAuth 1.0a.
-// Required env: TWITTER_API_KEY, TWITTER_API_SECRET,
-//               TWITTER_ACCESS_TOKEN, TWITTER_ACCESS_SECRET.
-// Falls back to mock when credentials are absent.
+// The consumer key/secret (app-level identity) always come from
+// TWITTER_API_KEY/SECRET in .env. The user access token/secret come from
+// the dashboard's Connect flow (platform_credentials table) if connected,
+// else fall back to TWITTER_ACCESS_TOKEN/SECRET in .env — see
+// pipeline/src/lib/credentials.js.
+// Falls back to mock when no credential is available either way.
 // Tweet auto-truncated to <=280 chars with UTM link at the end.
 // status 'posted'.
 // ============================================================
@@ -14,7 +17,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fetchJSON } from '../lib/http.js';
 import { dbInsert, cryptoId } from '../lib/supabase.js';
-import { env, has } from '../lib/env.js';
+import { env } from '../lib/env.js';
+import { getPlatformCredential } from '../lib/credentials.js';
 import { log } from '../lib/logger.js';
 import { PLATFORM_ORIENTATION } from '../lib/constants.js';
 
@@ -31,30 +35,53 @@ function pctEncode(str) {
 }
 
 /**
- * Build OAuth 1.0a Authorization header for a given request.
- * method, url, and params are used to construct the signature base string.
+ * Build an OAuth 1.0a Authorization header for a given request, signing with
+ * an explicit credential set. `token`/`tokenSecret` are omitted for the
+ * pre-redirect request_token step (no user token exists yet) — per the
+ * OAuth1 spec that just means an empty token secret in the signing key and
+ * no oauth_token param, not an error.
  */
-function oauthHeader(method, url, params = {}) {
+export function signOAuth1(method, url, params = {}, creds = {}) {
+  const {
+    consumerKey = env.TWITTER_API_KEY,
+    consumerSecret = env.TWITTER_API_SECRET,
+    token,
+    tokenSecret,
+  } = creds;
+
   const oauthParams = {
-    oauth_consumer_key: env.TWITTER_API_KEY,
+    oauth_consumer_key: consumerKey,
     oauth_nonce: Math.random().toString(36).slice(2) + Date.now().toString(36),
     oauth_signature_method: 'HMAC-SHA1',
     oauth_timestamp: String(Math.floor(Date.now() / 1000)),
-    oauth_token: env.TWITTER_ACCESS_TOKEN,
     oauth_version: '1.0',
+    ...(token ? { oauth_token: token } : {}),
   };
   const allParams = { ...params, ...oauthParams };
   const paramStr = Object.keys(allParams).sort()
     .map((k) => `${pctEncode(k)}=${pctEncode(allParams[k])}`)
     .join('&');
   const baseStr = `${method.toUpperCase()}&${pctEncode(url)}&${pctEncode(paramStr)}`;
-  const signingKey = `${pctEncode(env.TWITTER_API_SECRET)}&${pctEncode(env.TWITTER_ACCESS_SECRET)}`;
+  const signingKey = `${pctEncode(consumerSecret)}&${pctEncode(tokenSecret ?? '')}`;
   const signature = createHmac('sha1', signingKey).update(baseStr).digest('base64');
   oauthParams.oauth_signature = signature;
   const headerVal = 'OAuth ' + Object.keys(oauthParams).sort()
     .map((k) => `${pctEncode(k)}="${pctEncode(oauthParams[k])}"`)
     .join(', ');
   return headerVal;
+}
+
+/**
+ * Back-compat wrapper: signs with the app's own env-configured credentials
+ * (TWITTER_API_KEY/SECRET + TWITTER_ACCESS_TOKEN/SECRET), exactly as before.
+ * Exported for reuse by engagement/commentMonitor.js (reply search) and
+ * engagement/dmHandler.js (DM send) — same account, same signing scheme.
+ */
+export function oauthHeader(method, url, params = {}) {
+  return signOAuth1(method, url, params, {
+    token: env.TWITTER_ACCESS_TOKEN,
+    tokenSecret: env.TWITTER_ACCESS_SECRET,
+  });
 }
 
 /** Build tweet text: caption auto-truncated to fit <=280 chars with UTM appended. */
@@ -82,7 +109,17 @@ export async function uploadToTwitter({ videoId, strategy, files, thumbnails }) 
   let platformPostId;
   let platformUrl;
 
-  if (has('TWITTER_API_KEY', 'TWITTER_API_SECRET', 'TWITTER_ACCESS_TOKEN', 'TWITTER_ACCESS_SECRET')) {
+  const cred = await getPlatformCredential(PLATFORM);
+
+  if (cred?.accessToken && cred?.tokenSecret) {
+    // Sign with whichever token this call resolved to (Connect-flow row or
+    // env fallback) rather than the env-only oauthHeader default — same
+    // consumer key/secret (app-level, always from .env), different user token.
+    const sign = (method, url, params) => signOAuth1(method, url, params, {
+      token: cred.accessToken,
+      tokenSecret: cred.tokenSecret,
+    });
+
     try {
       // ── Step 1: Upload media (chunked v1.1 media upload) ─────────────────
       let mediaId = null;
@@ -107,7 +144,7 @@ export async function uploadToTwitter({ videoId, strategy, files, thumbnails }) 
         const initRes = await fetchJSON(MEDIA_UPLOAD_URL, {
           method: 'POST',
           headers: {
-            Authorization: oauthHeader('POST', MEDIA_UPLOAD_URL, initParams),
+            Authorization: sign('POST', MEDIA_UPLOAD_URL, initParams),
             'Content-Type': 'application/x-www-form-urlencoded',
           },
           body: initBody,
@@ -128,7 +165,7 @@ export async function uploadToTwitter({ videoId, strategy, files, thumbnails }) 
           const appendRes = await fetch(MEDIA_UPLOAD_URL, {
             method: 'POST',
             headers: {
-              Authorization: oauthHeader('POST', MEDIA_UPLOAD_URL, { command: 'APPEND', media_id: mediaId, segment_index: String(segmentIndex) }),
+              Authorization: sign('POST', MEDIA_UPLOAD_URL, { command: 'APPEND', media_id: mediaId, segment_index: String(segmentIndex) }),
             },
             body: appendForm,
           });
@@ -144,7 +181,7 @@ export async function uploadToTwitter({ videoId, strategy, files, thumbnails }) 
         await fetchJSON(MEDIA_UPLOAD_URL, {
           method: 'POST',
           headers: {
-            Authorization: oauthHeader('POST', MEDIA_UPLOAD_URL, finalizeParams),
+            Authorization: sign('POST', MEDIA_UPLOAD_URL, finalizeParams),
             'Content-Type': 'application/x-www-form-urlencoded',
           },
           body: new URLSearchParams(finalizeParams).toString(),
@@ -156,7 +193,7 @@ export async function uploadToTwitter({ videoId, strategy, files, thumbnails }) 
         while (processing && attempts < 20) {
           const statusUrl = `${MEDIA_UPLOAD_URL}?command=STATUS&media_id=${mediaId}`;
           const statusRes = await fetchJSON(statusUrl, {
-            headers: { Authorization: oauthHeader('GET', MEDIA_UPLOAD_URL, { command: 'STATUS', media_id: mediaId }) },
+            headers: { Authorization: sign('GET', MEDIA_UPLOAD_URL, { command: 'STATUS', media_id: mediaId }) },
           });
           const state = statusRes?.processing_info?.state;
           if (!state || state === 'succeeded') { processing = false; }
@@ -177,7 +214,7 @@ export async function uploadToTwitter({ videoId, strategy, files, thumbnails }) 
       const tweetRes = await fetchJSON(TWEET_URL, {
         method: 'POST',
         headers: {
-          Authorization: oauthHeader('POST', TWEET_URL),
+          Authorization: sign('POST', TWEET_URL),
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(tweetBody),

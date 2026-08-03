@@ -24,6 +24,7 @@ import {
   parseISO,
 } from 'date-fns';
 import { useTable } from '@/lib/useTable';
+import { authFetch } from '@/lib/authFetch';
 import { PageHeader, SectionCard, EmptyState, DataTable, Th, Td } from '@/components/ui/primitives';
 import { CalendarStatusBadge } from '@/components/ui/Badge';
 import { SlideOver } from '@/components/ui/SlideOver';
@@ -160,7 +161,7 @@ export default function CalendarPage() {
   async function handleGenerate() {
     setGenerating(true);
     try {
-      const res = await fetch('/api/ai', {
+      const res = await authFetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'calendar_plan' }),

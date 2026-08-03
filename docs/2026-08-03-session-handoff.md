@@ -138,14 +138,78 @@ one with each platform.
   but not click-tested. The server-side checks (the part that actually stops someone who
   "just finds the URL") were verified live via curl — see above.
 
+## Update — 2026-08-04
+
+Everything in §1–5 above was reviewed, committed (`d83c4f1`), and pushed to `origin/rhona`.
+One session later, a second feature — photo posts — was designed, built, verified, and
+merged into the same branch. Both are now live on `origin/rhona`; nothing is sitting
+uncommitted.
+
+### 6. Photo-post content type — done
+
+Added a second content type, `'photo'`, alongside the existing video pipeline — a single-
+image post per platform instead of a full script→voiceover→render pipeline. Built on a new
+branch `photo-support` (off `rhona`), then fast-forward-merged into `rhona` and pushed
+(`d83c4f1..3dafeca`); `photo-support` still exists on origin/local but is now redundant.
+
+- `shared/types.ts` + `shared/constants.ts` + `pipeline/src/lib/constants.js` — new
+  `ContentType` (`'video' | 'photo'`), `PHOTO_CAPABLE_PLATFORMS` (all 5 non-YouTube
+  platforms — YouTube has no photo-post equivalent in this pipeline).
+- `pipeline/supabase/schema.sql` — new `content_type` enum + column on `videos` and
+  `posts`, defaulting to `'video'` (idempotent `alter`s, so this is safe to run on the
+  existing live project alongside the still-unapplied `platform_credentials` block from
+  §4 — same SQL editor trip covers both).
+- `pipeline/src/stages/generateScript.js` — branches on `contentType`: photo mode produces
+  a lighter strategy (hook + single `imagePrompt` + captions/hashtags/SEO/virality score,
+  no script or timestamped shot list).
+- New `pipeline/src/stages/generatePhotos.js` — DALL·E 3 renders landscape/vertical/square
+  images and returns the exact same `{landscape, vertical, square}` shape `renderVideo.js`
+  does, so `postToPlatforms` and every uploader's `files[ORIENTATION]` lookup needed zero
+  interface changes.
+- `pipeline/src/index.js` — skips voiceover/media/thumbnail/render/repurpose for photo
+  runs (all video-specific), calls `generatePhotos` instead, and automatically drops
+  `youtube` from the platform list with a logged warning.
+- `pipeline/src/platforms/index.js` + all 5 non-YouTube uploader files — new
+  `uploadPhotoTo{TikTok,Instagram,LinkedIn,Facebook,Twitter}` functions, each hitting that
+  platform's real photo endpoint (simpler than video every time — no resumable upload, no
+  processing-status polling for images).
+- `dashboard/lib/placeholder.ts` — demo data now includes photo-type videos/posts (every
+  5th item), so the zero-config demo mode exercises both content types.
+
+**Verified live (demo mode, not a real API key anywhere):** photo runs correctly drop
+YouTube and post to the other 5, both when relying on `enabledPlatforms` and when YouTube
+is explicitly requested; video runs are unchanged (regression-tested side by side).
+`node scripts/check.js` passes all 42 pipeline files; dashboard `tsc --noEmit` passes with
+the new required `content_type` field.
+
+**Not done, explicitly out of scope for this pass:**
+- No dashboard UI to pick `contentType` on the Run Pipeline button yet — the
+  `/api/run-pipeline` route already forwards whatever body it's given verbatim, so this is
+  a UI-only addition when wanted.
+- TikTok's and Instagram's photo endpoints were implemented against known API shape,
+  following the same "real request + safe mock fallback" convention as the rest of the
+  codebase, but **not exercised against a live sandbox** — verify before flipping
+  `autoPost` on for real photo content, since platform APIs do drift.
+- Photo mode posts a single image per platform, not a carousel — carousels would be a
+  follow-up, not built here.
+- Instagram's and TikTok's photo endpoints require a *publicly reachable* image URL (no
+  raw file-bytes upload for photos, unlike video) — `INSTAGRAM_VIDEO_BASE_URL` (reused) and
+  the new `TIKTOK_PHOTO_BASE_URL` need to point at real hosting before this goes live;
+  `/output/photos` is local-only right now.
+
 ## Outstanding actions for you
 
-1. Run the `platform_credentials` SQL block in the live Supabase SQL editor (§4).
-2. Review and commit the uncommitted work in §1–5 (currently sitting as unstaged/untracked
-   changes on branch `rhona`).
-3. Set `PIPELINE_SHARED_SECRET` (same value) in both `pipeline/.env` and
+1. Run `pipeline/supabase/schema.sql` in the live Supabase SQL editor — covers both the
+   still-unapplied `platform_credentials` block (§4) and the new `content_type`
+   enum/column (§6).
+2. Set `PIPELINE_SHARED_SECRET` (same value) in both `pipeline/.env` and
    `dashboard/.env.local` before deploying beyond localhost — otherwise `/run` stays
    unauthenticated.
-4. Create Supabase Auth users for your team (Supabase dashboard → Authentication → Users)
+3. Create Supabase Auth users for your team (Supabase dashboard → Authentication → Users)
    — that's the login for the dashboard once Supabase is configured live.
-5. Click through the login flow once in a real browser to confirm the UI end-to-end.
+4. Click through the login flow once in a real browser to confirm the UI end-to-end.
+5. Set `INSTAGRAM_VIDEO_BASE_URL` and `TIKTOK_PHOTO_BASE_URL` to real hosting before
+   posting real (non-mock) photos.
+6. Decide when/whether to open a `rhona → main` PR — nothing's been opened yet.
+7. Optional cleanup: delete the now-redundant `photo-support` branch (fully merged into
+   `rhona`) on origin and local, if you don't want it hanging around.
